@@ -1,251 +1,93 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import Tesseract from 'tesseract.js'
+import { TRANSLATE_PROMPT, POS_COLORS, CATEGORY_COLORS } from './config/prompts'
+import { PROVIDERS } from './config/providers'
+import { LANGS } from './config/languages'
+import FormattedText from './components/FormattedText'
+import { S } from './styles/theme'
 
-// ─── Translation Prompt (shared across providers) ───────────────────────────
-const TRANSLATE_PROMPT = `Translate words from a foreign language to English.
 
-You receive JSON: {"words": [{"i":0,"w":"word1"},{"i":1,"w":"word2"},...], "lang": "Spanish", "context": "..."}
+// ─── Image Preprocessing for OCR ────────────────────────────────────────────
+async function preprocessForOCR(dataUrl) {
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => {
+      const c = document.createElement('canvas')
+      c.width = img.width
+      c.height = img.height
+      const ctx = c.getContext('2d')
+      ctx.drawImage(img, 0, 0)
 
-Each word has an index "i" and the word text "w". Translate each word to English using context.
+      const imageData = ctx.getImageData(0, 0, c.width, c.height)
+      const d = imageData.data
 
-Return a JSON array. For each input word, return an object that includes:
-- "i": the SAME index number from the input (MUST match)
-- "w": the SAME original word from the input (MUST match)
-- "t": English translation (MUST be English, not the original word)
-- "s": 2-3 English synonyms (empty array for articles/prepositions/punctuation)
-- "e": false if source language, true only if genuinely English
-
-CRITICAL: Every output object MUST include "i" and "w" copied exactly from the input.
-
-Words with punctuation attached (e.g. "púas,") — translate the word part, ignore punctuation.
-
-Output ONLY the raw JSON array. No markdown, no backticks.
-
-Example:
-Input: {"words":[{"i":0,"w":"Aventura"},{"i":1,"w":"en"},{"i":2,"w":"el"}],"lang":"Spanish","context":"Aventura en el laberinto"}
-Output: [{"i":0,"w":"Aventura","t":"Adventure","s":["quest","journey"],"e":false},{"i":1,"w":"en","t":"in","s":[],"e":false},{"i":2,"w":"el","t":"the","s":[],"e":false}]`
-
-// ─── AI Provider Configurations ─────────────────────────────────────────────
-const PROVIDERS = {
-  anthropic: {
-    label: 'Anthropic (Claude)',
-    placeholder: 'sk-ant-...',
-    keyPrefix: 'sk-ant-',
-    color: '#d2a8ff',
-    url: 'https://console.anthropic.com/settings/keys',
-    billingUrl: 'https://console.anthropic.com/settings/plans',
-    model: 'claude-haiku-4-5-20251001',
-    call: async (apiKey, systemPrompt, userContent) => {
-      const resp = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true',
-        },
-        body: JSON.stringify({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 4000,
-          system: systemPrompt,
-          messages: [{ role: 'user', content: userContent }],
-        }),
-      })
-      if (!resp.ok) {
-        const errBody = await resp.text()
-        throw new Error(`API ${resp.status}: ${errBody.slice(0, 200)}`)
+      // Step 1: Convert to grayscale
+      for (let i = 0; i < d.length; i += 4) {
+        const gray = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]
+        d[i] = d[i + 1] = d[i + 2] = gray
       }
-      const data = await resp.json()
-      return data.content?.map((c) => (c.type === 'text' ? c.text : '')).join('')
-    },
-  },
-  openai: {
-    label: 'OpenAI (GPT)',
-    placeholder: 'sk-...',
-    keyPrefix: 'sk-',
-    color: '#74aa9c',
-    url: 'https://platform.openai.com/api-keys',
-    billingUrl: 'https://platform.openai.com/settings/organization/billing',
-    model: 'gpt-4o-mini',
-    call: async (apiKey, systemPrompt, userContent) => {
-      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model: 'gpt-4o-mini',
-          max_tokens: 4000,
-          response_format: { type: 'json_object' },
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userContent },
-          ],
-        }),
-      })
-      if (!resp.ok) {
-        const errBody = await resp.text()
-        throw new Error(`API ${resp.status}: ${errBody.slice(0, 200)}`)
+
+      // Step 2: Detect if background is dark (average brightness)
+      let totalBrightness = 0
+      const pixelCount = d.length / 4
+      for (let i = 0; i < d.length; i += 4) totalBrightness += d[i]
+      const avgBrightness = totalBrightness / pixelCount
+      const isDark = avgBrightness < 128
+
+      // Step 3: Contrast enhancement (stronger for dark images)
+      const factor = isDark ? 2.2 : 1.5
+      for (let i = 0; i < d.length; i += 4) {
+        const val = (d[i] - 128) * factor + 128
+        d[i] = d[i + 1] = d[i + 2] = Math.max(0, Math.min(255, val))
       }
-      const data = await resp.json()
-      return data.choices?.[0]?.message?.content || ''
-    },
-  },
-  gemini: {
-    label: 'Google (Gemini)',
-    placeholder: 'AIza...',
-    keyPrefix: 'AIza',
-    color: '#4285f4',
-    url: 'https://aistudio.google.com/apikey',
-    billingUrl: 'https://aistudio.google.com/apikey',
-    model: 'gemini-2.0-flash',
-    call: async (apiKey, systemPrompt, userContent) => {
-      const resp = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            system_instruction: { parts: [{ text: systemPrompt }] },
-            contents: [{ parts: [{ text: userContent }] }],
-            generationConfig: { responseMimeType: 'application/json' },
-          }),
+
+      // Step 4: Adaptive thresholding (local neighborhood comparison)
+      // Use a simplified approach: compare each pixel to its local average
+      const w = c.width, h = c.height
+      const gray = new Uint8Array(pixelCount)
+      for (let i = 0; i < pixelCount; i++) gray[i] = d[i * 4]
+
+      const blockSize = Math.max(15, Math.round(Math.min(w, h) / 50) | 1) // odd number
+      const half = blockSize >> 1
+      const threshold = new Uint8Array(pixelCount)
+
+      // Build integral image for fast local averages
+      const integral = new Float64Array((w + 1) * (h + 1))
+      for (let y = 0; y < h; y++) {
+        let rowSum = 0
+        for (let x = 0; x < w; x++) {
+          rowSum += gray[y * w + x]
+          integral[(y + 1) * (w + 1) + (x + 1)] = rowSum + integral[y * (w + 1) + (x + 1)]
         }
-      )
-      if (!resp.ok) {
-        const errBody = await resp.text()
-        throw new Error(`API ${resp.status}: ${errBody.slice(0, 200)}`)
       }
-      const data = await resp.json()
-      return data.candidates?.[0]?.content?.parts?.map((p) => p.text).join('') || ''
-    },
-  },
-  grok: {
-    label: 'xAI (Grok)',
-    placeholder: 'xai-...',
-    keyPrefix: 'xai-',
-    color: '#e6e6e6',
-    url: 'https://console.x.ai/',
-    billingUrl: 'https://console.x.ai/',
-    model: 'grok-3-mini-fast',
-    call: async (apiKey, systemPrompt, userContent) => {
-      const resp = await fetch('https://api.x.ai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model: 'grok-3-mini-fast',
-          max_tokens: 4000,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userContent },
-          ],
-        }),
-      })
-      if (!resp.ok) {
-        const errBody = await resp.text()
-        throw new Error(`API ${resp.status}: ${errBody.slice(0, 200)}`)
+
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const x0 = Math.max(0, x - half), y0 = Math.max(0, y - half)
+          const x1 = Math.min(w - 1, x + half), y1 = Math.min(h - 1, y + half)
+          const count = (x1 - x0 + 1) * (y1 - y0 + 1)
+          const sum = integral[(y1 + 1) * (w + 1) + (x1 + 1)]
+            - integral[y0 * (w + 1) + (x1 + 1)]
+            - integral[(y1 + 1) * (w + 1) + x0]
+            + integral[y0 * (w + 1) + x0]
+          const localMean = sum / count
+          // Pixel is text if it's significantly different from local mean
+          const offset = isDark ? -15 : 15
+          threshold[y * w + x] = gray[y * w + x] > localMean - offset ? 255 : 0
+        }
       }
-      const data = await resp.json()
-      return data.choices?.[0]?.message?.content || ''
-    },
-  },
-}
 
-// ─── Available OCR Languages ─────────────────────────────────────────────────
-const LANGS = [
-  { code: 'auto', label: 'Detect Language' },
-  { code: 'spa', label: 'Spanish' },
-  { code: 'fra', label: 'French' },
-  { code: 'deu', label: 'German' },
-  { code: 'por', label: 'Portuguese' },
-  { code: 'ita', label: 'Italian' },
-  { code: 'jpn', label: 'Japanese' },
-  { code: 'kor', label: 'Korean' },
-  { code: 'chi_sim', label: 'Chinese (Simplified)' },
-  { code: 'chi_tra', label: 'Chinese (Traditional)' },
-  { code: 'rus', label: 'Russian' },
-  { code: 'ara', label: 'Arabic' },
-  { code: 'hin', label: 'Hindi' },
-  { code: 'tha', label: 'Thai' },
-  { code: 'vie', label: 'Vietnamese' },
-  { code: 'pol', label: 'Polish' },
-  { code: 'nld', label: 'Dutch' },
-  { code: 'eng', label: 'English' },
-]
+      // If dark background, invert so text is dark on white (Tesseract prefers this)
+      for (let i = 0; i < pixelCount; i++) {
+        const val = isDark ? (255 - threshold[i]) : threshold[i]
+        d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = val
+      }
 
-// ─── Formatted Text Renderer ────────────────────────────────────────────────
-function FormattedText({ text, accentColor = '#58a6ff' }) {
-  if (!text) return null
-  // Split into sections by numbered headers (1. Title:, **1. Title:**) or ALL-CAPS headers
-  const lines = text.split('\n')
-  const sections = []
-  let current = null
-
-  for (const line of lines) {
-    const trimmed = line.trim()
-    if (!trimmed) {
-      if (current) current.lines.push('')
-      continue
+      ctx.putImageData(imageData, 0, 0)
+      resolve(c.toDataURL('image/png'))
     }
-    // Match patterns like "1. Title:", "**1. Title:**", "TITLE:", "**TITLE**"
-    const headerMatch = trimmed.match(
-      /^(?:\*{0,2})?\s*(?:\d+\.\s*)?([A-Z][A-Z\s/&]+(?:FORM|WORDS|USAGE|SENTENCES|PATTERNS|REGISTER|CONJUGATIONS|EXPLANATION|MEANING|SPEECH|ROOT|INFINITIVE|RELATED|REGIONAL|EXAMPLE)[A-Z\s/&]*?)\s*[:*]*\s*(?:\*{0,2})?(.*)$/
-    ) || trimmed.match(
-      /^(?:\*{0,2})\s*\d+\.\s*([^*:]+?)\s*[:*]+\s*(?:\*{0,2})?\s*(.*)$/
-    )
-
-    if (headerMatch) {
-      current = { title: headerMatch[1].trim().replace(/\*+/g, ''), lines: [] }
-      sections.push(current)
-      if (headerMatch[2]?.trim()) current.lines.push(headerMatch[2].trim())
-    } else {
-      if (!current) {
-        current = { title: null, lines: [] }
-        sections.push(current)
-      }
-      current.lines.push(trimmed)
-    }
-  }
-
-  return (
-    <div>
-      {sections.map((section, i) => (
-        <div key={i} style={{ marginBottom: 12 }}>
-          {section.title && (
-            <div style={{
-              fontSize: 13, fontWeight: 700, textTransform: 'uppercase',
-              letterSpacing: '.08em', color: accentColor, marginBottom: 6,
-              paddingBottom: 4, borderBottom: `1px solid ${accentColor}33`,
-            }}>
-              {section.title}
-            </div>
-          )}
-          <div style={{ fontSize: 14, color: '#c9d1d9', lineHeight: 1.8 }}>
-            {section.lines.map((line, j) => {
-              if (!line) return <div key={j} style={{ height: 6 }} />
-              // Format bullet points and dashes
-              const isBullet = /^[-•–]/.test(line)
-              const isExample = /^[""]/.test(line) || /ejemplo|example|translation/i.test(line)
-              return (
-                <div key={j} style={{
-                  paddingLeft: isBullet ? 12 : 0,
-                  fontStyle: isExample ? 'italic' : 'normal',
-                  color: isExample ? '#8b949e' : '#c9d1d9',
-                  marginBottom: 2,
-                }}>
-                  {line}
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      ))}
-    </div>
-  )
+    img.src = dataUrl
+  })
 }
 
 export default function App() {
@@ -273,11 +115,14 @@ export default function App() {
   const [chatLoading, setChatLoading] = useState(false)
   const [wordStudy, setWordStudy] = useState(null)
   const [wordStudyLoading, setWordStudyLoading] = useState(false)
+  const [conjugation, setConjugation] = useState(null)
+  const [conjugationLoading, setConjugationLoading] = useState(false)
   const [stage, setStage] = useState('idle') // idle | captured | ocr | translating | done
   const [expanded, setExpanded] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [showHighlights, setShowHighlights] = useState(true)
   const [language, setLanguage] = useState('auto')
+  const [targetLang, setTargetLang] = useState('eng')
 
   const fileInputRef = useRef(null)
   const containerRef = useRef(null)
@@ -294,6 +139,7 @@ export default function App() {
       setApiKeys(keys)
       if (config.provider) setProvider(config.provider)
       if (config.language) setLanguage(config.language)
+      if (config.targetLang) setTargetLang(config.targetLang)
       if (config.showHighlights !== undefined) setShowHighlights(config.showHighlights)
       setKeysLoaded(true)
       setConfigLoaded(true)
@@ -316,9 +162,9 @@ export default function App() {
     fetch('/api/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider, language, showHighlights }),
+      body: JSON.stringify({ provider, language, targetLang, showHighlights }),
     }).catch(() => {})
-  }, [provider, language, showHighlights, configLoaded])
+  }, [provider, language, targetLang, showHighlights, configLoaded])
 
   const setCurrentKey = (key) => {
     setApiKeys((prev) => ({ ...prev, [provider]: key }))
@@ -416,6 +262,10 @@ export default function App() {
         ocrInput = c.toDataURL('image/png')
       }
 
+      // Preprocess image for better OCR accuracy (grayscale, contrast, threshold)
+      setProgress('Preprocessing image…')
+      ocrInput = await preprocessForOCR(ocrInput)
+
       const ocrLang = language === 'auto' ? 'eng+spa+fra+deu+por+ita' : language
       const result = await Tesseract.recognize(ocrInput, ocrLang, {
         logger: (m) => {
@@ -430,7 +280,19 @@ export default function App() {
       // Scale bounding boxes back to original resolution if we downscaled
       const bboxScale = imgDims.w > 1920 ? imgDims.w / 1920 : 1
       const rawWords = (result.data.words || [])
-        .filter((w) => w.text.trim().length > 0 && w.confidence > 15)
+        .filter((w) => {
+          const t = w.text.trim()
+          if (t.length === 0) return false
+          // Must contain at least one letter
+          if (!/[a-zA-ZÀ-ÿ]/.test(t)) return false
+          // Count actual letters (not symbols/digits)
+          const letterCount = (t.match(/[a-zA-ZÀ-ÿ]/g) || []).length
+          if (letterCount === 0) return false
+          // Short words need higher confidence to avoid noise
+          const minConf = letterCount === 1 ? 85 : t.length <= 2 ? 70 : t.length <= 3 ? 45 : 25
+          if (w.confidence < minConf) return false
+          return true
+        })
         .map((w) => ({
           text: w.text.trim(),
           bbox: {
@@ -442,7 +304,30 @@ export default function App() {
           confidence: w.confidence,
         }))
 
-      if (rawWords.length === 0) {
+      // Merge adjacent fragments that are very close horizontally (same word split by color/style)
+      const merged = []
+      for (let j = 0; j < rawWords.length; j++) {
+        const w = rawWords[j]
+        if (merged.length > 0) {
+          const prev = merged[merged.length - 1]
+          const gap = w.bbox.x0 - prev.bbox.x1
+          const avgHeight = ((prev.bbox.y1 - prev.bbox.y0) + (w.bbox.y1 - w.bbox.y0)) / 2
+          const sameRow = Math.abs(w.bbox.y0 - prev.bbox.y0) < avgHeight * 0.5
+          // If gap is very small (< 30% of char height) and same row, merge
+          if (sameRow && gap >= 0 && gap < avgHeight * 0.3) {
+            prev.text += w.text
+            prev.bbox.x1 = w.bbox.x1
+            prev.bbox.y0 = Math.min(prev.bbox.y0, w.bbox.y0)
+            prev.bbox.y1 = Math.max(prev.bbox.y1, w.bbox.y1)
+            prev.confidence = Math.min(prev.confidence, w.confidence)
+            continue
+          }
+        }
+        merged.push({ ...w, bbox: { ...w.bbox } })
+      }
+      const finalWords = merged
+
+      if (finalWords.length === 0) {
         setError('No readable text found. Try a different language or a clearer screenshot.')
         setStage('captured')
         setLoading(false)
@@ -451,9 +336,9 @@ export default function App() {
 
       // ── Stage 2: AI Translation ────────────────────────────────────────────
       setStage('translating')
-      setProgress(`Found ${rawWords.length} words. Translating…`)
+      setProgress(`Found ${finalWords.length} words. Translating…`)
 
-      const wordTexts = rawWords.map((w) => w.text)
+      const wordTexts = finalWords.map((w) => w.text)
       const fullContext = wordTexts.join(' ')
       const chunkSize = 80
       const allTranslations = {} // globalIndex → { t, s, e }
@@ -466,27 +351,48 @@ export default function App() {
         // Build array of {i, w} objects with global indices
         const indexedWords = chunk.map((word, j) => ({ i: i + j, w: word }))
 
-        const langLabel = language === 'auto' ? 'Auto-detect (figure out the language from context)' : (LANGS.find((l) => l.code === language)?.label || 'Unknown')
-        const payload = JSON.stringify({ words: indexedWords, lang: langLabel, context: fullContext })
+        const fromLabel = language === 'auto' ? 'Auto-detect' : (LANGS.find((l) => l.code === language)?.label || 'Unknown')
+        const toLabel = LANGS.find((l) => l.code === targetLang)?.label || 'English'
+        const payload = JSON.stringify({ words: indexedWords, from: fromLabel, to: toLabel, context: fullContext })
         const text = await providerConfig.call(apiKey, TRANSLATE_PROMPT, payload)
         if (!text) throw new Error('Empty translation response')
 
         console.log('[ScreenLens] Chunk', i, 'sent:', indexedWords.length, 'words')
         console.log('[ScreenLens] AI returned:', text.slice(0, 300))
 
-        let cleaned = text.replace(/```json|```/g, '').trim()
+        // Extract JSON from response — handle markdown wrapping, preamble, etc.
+        let cleaned = text
+        // Strip markdown code fences
+        cleaned = cleaned.replace(/```(?:json)?\s*/g, '').replace(/```\s*/g, '')
+        // Try to find the JSON array/object in the response
+        const jsonStart = cleaned.indexOf('[') !== -1 ? cleaned.indexOf('[') : cleaned.indexOf('{')
+        if (jsonStart > 0) cleaned = cleaned.slice(jsonStart)
+        const lastBracket = Math.max(cleaned.lastIndexOf(']'), cleaned.lastIndexOf('}'))
+        if (lastBracket > 0) cleaned = cleaned.slice(0, lastBracket + 1)
+        cleaned = cleaned.trim()
+
         let parsed
         try {
           parsed = JSON.parse(cleaned)
         } catch {
           let r = cleaned
+          // Fix unquoted or single-quoted property names
+          r = r.replace(/([{,]\s*)(\w+)\s*:/g, '$1"$2":')
+          r = r.replace(/'/g, '"')
+          r = r.replace(/,\s*([}\]])/g, '$1')
           if ((r.match(/"/g) || []).length % 2 !== 0) r += '"'
           r = r.replace(/,\s*$/, '')
           let ob = (r.match(/\[/g) || []).length - (r.match(/\]/g) || []).length
           let oc = (r.match(/\{/g) || []).length - (r.match(/\}/g) || []).length
           for (; ob > 0; ob--) r += ']'
           for (; oc > 0; oc--) r += '}'
-          parsed = JSON.parse(r)
+          try {
+            parsed = JSON.parse(r)
+          } catch (e2) {
+            console.error('[ScreenLens] JSON repair failed:', e2.message, '\nRaw:', text.slice(0, 500))
+            // Last resort: skip this chunk, words will be retried via lazy translate
+            continue
+          }
         }
 
         // Flatten to array of items (handles both array and object responses)
@@ -532,31 +438,37 @@ export default function App() {
 
       // ── Quick gap check: fill any missing indices ──────────────────────────
       const missing = []
-      for (let i = 0; i < rawWords.length; i++) {
+      for (let i = 0; i < finalWords.length; i++) {
         if (!allTranslations[String(i)]) {
           allTranslations[String(i)] = { t: 'Loading…', s: [], e: false, _untranslated: true }
           missing.push(i)
         }
       }
       if (missing.length > 0) {
-        console.warn(`[ScreenLens] ${missing.length} words had no translation, will translate on hover:`, missing.map((i) => rawWords[i].text))
+        console.warn(`[ScreenLens] ${missing.length} words had no translation, will translate on hover:`, missing.map((i) => finalWords[i].text))
       }
 
       // ── Merge OCR + Translation (matched by index, can't shift) ─────────────
-      const merged = rawWords.map((w, i) => {
+      const translatedWords = finalWords.map((w, i) => {
         const t = allTranslations[String(i)]
+        // Backward compat: map old e:true to category 'target'
+        const category = t.c || (t.e === true ? 'target' : 'foreign')
+        const partOfSpeech = t.p || 'other'
         return {
           text: w.text,
           bbox: w.bbox,
           confidence: w.confidence,
           translation: t.t || w.text,
           synonyms: t.s || [],
-          isEnglish: t.e === true,
+          category,
+          partOfSpeech,
+          pronunciation: t.r || '',
+          isEnglish: category === 'target',
           _untranslated: t._untranslated || false,
         }
       })
 
-      setOcrWords(merged)
+      setOcrWords(translatedWords)
       setStage('done')
 
       // Auto-retry any missed words in background
@@ -571,7 +483,7 @@ export default function App() {
       setLoading(false)
       setProgress('')
     }
-  }, [apiKey, language, providerConfig])
+  }, [apiKey, language, targetLang, providerConfig])
 
   // ─── Keyboard Shortcuts ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -632,8 +544,9 @@ export default function App() {
     try {
       const word = ocrWords[idx]
       const context = ocrWords.map((w) => w.text).join(' ')
-      const langLabel = language === 'auto' ? 'Auto-detect' : (LANGS.find((l) => l.code === language)?.label || 'Unknown')
-      const payload = JSON.stringify({ words: [{ i: idx, w: word.text }], lang: langLabel, context })
+      const fromLabel = language === 'auto' ? 'Auto-detect' : (LANGS.find((l) => l.code === language)?.label || 'Unknown')
+      const toLabel = LANGS.find((l) => l.code === targetLang)?.label || 'English'
+      const payload = JSON.stringify({ words: [{ i: idx, w: word.text }], from: fromLabel, to: toLabel, context })
       const text = await providerConfig.call(apiKey, TRANSLATE_PROMPT, payload)
       if (!text) return
       let parsed = JSON.parse(text.replace(/```json|```/g, '').trim())
@@ -677,7 +590,7 @@ export default function App() {
       setHoveredIdx(idx)
       setExplanation(null)
       setDeepExplanation(null)
-      setWordStudy(null)
+      setWordStudy(null); setConjugation(null)
       setChatMessages([])
       setChatInput('')
       const rect = e.currentTarget.getBoundingClientRect()
@@ -694,7 +607,7 @@ export default function App() {
     setPinnedIdx(null)
     setExplanation(null)
     setDeepExplanation(null)
-    setWordStudy(null)
+    setWordStudy(null); setConjugation(null)
     setChatMessages([])
     setChatInput('')
     setHoveredIdx(null)
@@ -764,7 +677,7 @@ In 3-4 short sentences, explain why "${word.text}" means "${word.translation}" i
   const fetchWordStudy = useCallback(async (word) => {
     if (!apiKey || wordStudyLoading) return
     setWordStudyLoading(true)
-    setWordStudy(null)
+    setWordStudy(null); setConjugation(null)
     try {
       const langLabel = LANGS.find((l) => l.code === language)?.label || 'the source language'
       const prompt = `Word: "${word.text}" (${langLabel}) → "${word.translation}"
@@ -792,6 +705,39 @@ No paragraphs. No explanations. Just the facts. Use the section labels above.`
       setWordStudyLoading(false)
     }
   }, [apiKey, wordStudyLoading, ocrWords, language, providerConfig])
+
+  // ─── Conjugation ───────────────────────────────────────────────────────────
+  const fetchConjugation = useCallback(async (word) => {
+    if (!apiKey || conjugationLoading) return
+    setConjugationLoading(true)
+    setConjugation(null)
+    try {
+      const langLabel = LANGS.find((l) => l.code === language)?.label || 'the source language'
+      const prompt = `Word: "${word.text}" (${langLabel})
+
+Show the full conjugation table for this word. If it's a verb, show all major tenses. If noun/adjective, show all forms.
+
+For verbs, use this format (one line each, no extra text):
+INFINITIVE: [infinitive form]
+PRESENT: yo [form], tú [form], él [form], nosotros [form], ellos [form]
+PRETERITE: yo [form], tú [form], él [form], nosotros [form], ellos [form]
+IMPERFECT: yo [form], tú [form], él [form], nosotros [form], ellos [form]
+FUTURE: yo [form], tú [form], él [form], nosotros [form], ellos [form]
+SUBJUNCTIVE: yo [form], tú [form], él [form], nosotros [form], ellos [form]
+IMPERATIVE: tú [form], usted [form], nosotros [form]
+
+For nouns: SINGULAR: [form], PLURAL: [form], GENDER: [m/f]
+For adjectives: MASC SING: [form], FEM SING: [form], MASC PL: [form], FEM PL: [form]
+
+No explanations. Just the forms. Use the section labels above.`
+      const text = await providerConfig.call(apiKey, 'You are a conjugation table generator. Only output the forms, no commentary.', prompt)
+      setConjugation(text)
+    } catch (err) {
+      setConjugation('Failed: ' + err.message)
+    } finally {
+      setConjugationLoading(false)
+    }
+  }, [apiKey, conjugationLoading, language, providerConfig])
 
   // ─── Chat (ask anything about the word) ───────────────────────────────────
   const sendChat = useCallback(async (word) => {
@@ -836,6 +782,13 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
       const isActive = hoveredIdx === i || pinnedIdx === i
       const isPinned = pinnedIdx === i
 
+      // Get color based on category and part of speech
+      const catColor = CATEGORY_COLORS[word.category]
+      const posColor = POS_COLORS[word.partOfSpeech] || POS_COLORS.other
+      const wordColor = (word.category === 'name') ? catColor
+        : (word.category === 'target' || word.category === 'number') ? catColor
+        : posColor
+
       return (
         <span
           key={i}
@@ -849,14 +802,12 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
             width: `${w}%`,
             height: `${h}%`,
             background: isActive
-              ? isPinned ? 'rgba(88, 166, 255, 0.45)' : 'rgba(210, 168, 255, 0.45)'
-              : showHighlights && !word.isEnglish
-                ? 'rgba(210, 168, 255, 0.12)'
-                : 'transparent',
+              ? isPinned ? 'rgba(88, 166, 255, 0.45)' : (wordColor.bg.replace(/[\d.]+\)$/, '0.35)'))
+              : showHighlights ? wordColor.bg : 'transparent',
             border: isActive
-              ? isPinned ? '2px solid rgba(88, 166, 255, 0.85)' : '2px solid rgba(210, 168, 255, 0.85)'
-              : showHighlights && !word.isEnglish
-                ? '1px solid rgba(210, 168, 255, 0.2)'
+              ? isPinned ? '2px solid rgba(88, 166, 255, 0.85)' : `2px solid ${wordColor.border}`
+              : showHighlights && wordColor.border !== 'transparent'
+                ? `1px solid ${wordColor.border}`
                 : '1px solid transparent',
             borderRadius: 2,
             cursor: 'pointer',
@@ -916,9 +867,15 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
           <span style={S.badge}>LOCAL</span>
         </div>
         <div style={S.headerRight}>
-          <select value={language} onChange={(e) => setLanguage(e.target.value)} style={S.select}>
-            {LANGS.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
-          </select>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#1c2129', border: '1px solid #2a3040', borderRadius: 6, padding: '2px 4px' }}>
+            <select value={language} onChange={(e) => setLanguage(e.target.value)} style={{ ...S.select, border: 'none', background: 'transparent', padding: '4px 6px' }}>
+              {LANGS.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
+            </select>
+            <span style={{ color: '#58a6ff', fontSize: 14, fontWeight: 700 }}>→</span>
+            <select value={targetLang} onChange={(e) => setTargetLang(e.target.value)} style={{ ...S.select, border: 'none', background: 'transparent', padding: '4px 6px' }}>
+              {LANGS.filter((l) => l.code !== 'auto').map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
+            </select>
+          </div>
 
           {stage === 'done' && (
             <button onClick={() => setShowHighlights(!showHighlights)} style={{
@@ -1072,7 +1029,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
 
         {/* Image + overlays */}
         {screenshot && (
-          <div style={{ animation: 'fadeUp 0.25s ease' }}>
+          <div style={{ animation: 'fadeUp 0.25s ease', textAlign: 'center' }}>
             {/* Progress indicator */}
             {loading && (
               <div style={S.progressBar}>
@@ -1169,16 +1126,38 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
         )}
         <div style={tooltipStyle} onClick={(e) => e.stopPropagation()}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={S.ttWord}>{activeWord.text}</div>
-            {isPinned && (
-              <span onClick={dismissPin} style={S.ttClose}>&times;</span>
-            )}
+            <div>
+              <div style={S.ttWord}>{activeWord.text}</div>
+              {activeWord.pronunciation && (
+                <div style={{ fontSize: 11, color: '#7d8590', fontStyle: 'italic', marginBottom: 2 }}>/{activeWord.pronunciation}/</div>
+              )}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              {(() => {
+                const posColor = POS_COLORS[activeWord.partOfSpeech] || POS_COLORS.other
+                const catColor = CATEGORY_COLORS[activeWord.category]
+                const showCat = activeWord.category === 'name'
+                const tagColor = showCat ? catColor : posColor
+                const tagLabel = showCat ? 'Name' : posColor.label
+                return tagLabel ? (
+                  <span style={{ fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.08em', color: tagColor.text, background: tagColor.bg, border: `1px solid ${tagColor.border}`, padding: '2px 6px', borderRadius: 3 }}>
+                    {tagLabel}
+                  </span>
+                ) : null
+              })()}
+              {isPinned && (
+                <span onClick={dismissPin} style={S.ttClose}>&times;</span>
+              )}
+            </div>
           </div>
-          {!activeWord.isEnglish && (
+          {activeWord.category === 'foreign' && (
             <div style={S.ttTrans}>→ {activeWord.translation}</div>
           )}
-          {activeWord.isEnglish && (
-            <div style={S.ttEng}>English</div>
+          {activeWord.category === 'name' && (
+            <div style={{ fontSize: 11, color: '#7ee787', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.08em', marginBottom: 8 }}>Name / Proper Noun</div>
+          )}
+          {activeWord.category === 'target' && (
+            <div style={S.ttEng}>{LANGS.find((l) => l.code === targetLang)?.label || 'Target Language'}</div>
           )}
           {activeWord.synonyms?.length > 0 && (
             <div style={S.ttSynWrap}>
@@ -1226,6 +1205,15 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                       {wordStudyLoading ? 'Loading...' : `Study "${activeWord.text}"`}
                     </button>
                   )}
+                  {!conjugation && (activeWord.partOfSpeech === 'verb' || activeWord.partOfSpeech === 'noun' || activeWord.partOfSpeech === 'adj') && (
+                    <button
+                      onClick={() => fetchConjugation(activeWord)}
+                      disabled={conjugationLoading}
+                      style={{ ...S.ttDeepBtn, opacity: conjugationLoading ? 0.5 : 1, background: 'rgba(100,210,210,.12)', color: '#64d2d2', borderColor: 'rgba(100,210,210,.25)' }}
+                    >
+                      {conjugationLoading ? 'Loading...' : 'Conjugate'}
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -1254,6 +1242,24 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                   </div>
                   <div style={S.ttWordStudyBody}>
                     <FormattedText text={wordStudy} accentColor="#7ee787" />
+                  </div>
+                </div>
+              )}
+
+              {/* Conjugation */}
+              {conjugationLoading && !conjugation && (
+                <div style={{ ...S.ttExplaining, marginTop: 8 }}>
+                  <div style={S.ttExplainingDot} />
+                  Loading conjugations...
+                </div>
+              )}
+              {conjugation && (
+                <div style={{ marginTop: 8, border: '1px solid rgba(100,210,210,.2)', borderRadius: 8, overflow: 'hidden' }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#64d2d2', background: 'rgba(100,210,210,.08)', padding: '8px 10px', borderBottom: '1px solid rgba(100,210,210,.15)' }}>
+                    Conjugations: {activeWord.text}
+                  </div>
+                  <div style={{ padding: '14px 16px', background: 'rgba(100,210,210,.03)' }}>
+                    <FormattedText text={conjugation} accentColor="#64d2d2" />
                   </div>
                 </div>
               )}
@@ -1322,334 +1328,3 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
   )
 }
 
-// ─── Styles ──────────────────────────────────────────────────────────────────
-const S = {
-  app: {
-    minHeight: '100vh', background: '#0e1117', color: '#e6edf3',
-    fontFamily: "'JetBrains Mono', 'SF Mono', 'Fira Code', monospace",
-    display: 'flex', flexDirection: 'column', position: 'relative',
-  },
-
-  // Header
-  header: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    padding: '10px 20px', borderBottom: '1px solid #2a3040',
-    background: '#161b22', flexWrap: 'wrap', gap: 8,
-  },
-  headerLeft: { display: 'flex', alignItems: 'center', gap: 10 },
-  title: { fontSize: 16, fontWeight: 700, margin: 0 },
-  badge: {
-    fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.1em',
-    color: '#7ee787', background: 'rgba(126,231,135,.12)',
-    padding: '2px 7px', borderRadius: 3,
-  },
-  headerRight: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
-  select: {
-    padding: '6px 10px', background: '#1c2129', color: '#e6edf3',
-    border: '1px solid #2a3040', borderRadius: 6, fontSize: 11,
-    fontFamily: 'inherit', cursor: 'pointer', outline: 'none',
-  },
-  ghostBtn: {
-    padding: '6px 12px', background: 'transparent', color: '#7d8590',
-    border: '1px solid #2a3040', borderRadius: 6, fontWeight: 600,
-    fontSize: 11, fontFamily: 'inherit', cursor: 'pointer',
-  },
-  captureGroup: { display: 'flex', gap: 0 },
-  captureBtn: {
-    padding: '7px 14px', background: '#58a6ff', color: '#0e1117',
-    border: 'none', borderRadius: '6px 0 0 6px', fontWeight: 700,
-    fontSize: 12, fontFamily: 'inherit', cursor: 'pointer',
-    display: 'flex', alignItems: 'center',
-  },
-  uploadBtn: {
-    padding: '7px 14px', background: '#3a7bd5', color: '#0e1117',
-    border: 'none', borderRadius: '0 6px 6px 0', fontWeight: 700,
-    fontSize: 12, fontFamily: 'inherit', cursor: 'pointer',
-    borderLeft: '1px solid rgba(14,17,23,.3)',
-  },
-  kbd: {
-    fontSize: 10, color: '#7d8590', background: '#1c2129',
-    border: '1px solid #2a3040', borderRadius: 4, padding: '3px 8px',
-    fontFamily: 'inherit',
-  },
-  kbdInline: {
-    fontSize: '0.85em', color: '#7d8590', background: '#1c2129',
-    border: '1px solid #2a3040', borderRadius: 3, padding: '1px 5px',
-    fontFamily: 'inherit',
-  },
-
-  // API Key bar
-  keyBar: {
-    display: 'flex', alignItems: 'center', gap: 10, padding: '8px 20px',
-    background: '#1c2129', borderBottom: '1px solid #2a3040', flexWrap: 'wrap',
-  },
-  keyLabel: { fontSize: 12, color: '#7d8590', fontWeight: 600 },
-  keyInput: {
-    flex: 1, minWidth: 200, padding: '6px 10px', background: '#0e1117',
-    color: '#e6edf3', border: '1px solid #2a3040', borderRadius: 6,
-    fontSize: 12, fontFamily: 'inherit', outline: 'none',
-  },
-  getKeyLink: {
-    padding: '6px 12px', background: 'rgba(88,166,255,.12)', color: '#58a6ff',
-    border: '1px solid rgba(88,166,255,.25)', borderRadius: 6, fontWeight: 600,
-    fontSize: 11, fontFamily: 'inherit', cursor: 'pointer', textDecoration: 'none',
-    whiteSpace: 'nowrap',
-  },
-  keyDone: {
-    padding: '6px 14px', background: '#58a6ff', color: '#0e1117',
-    border: 'none', borderRadius: 6, fontWeight: 700, fontSize: 12,
-    fontFamily: 'inherit', cursor: 'pointer',
-  },
-
-  // Main
-  main: { flex: 1, padding: 20, overflow: 'auto' },
-
-  // Empty state
-  emptyState: {
-    display: 'flex', flexDirection: 'column', alignItems: 'center',
-    justifyContent: 'center', minHeight: '65vh', textAlign: 'center',
-  },
-  emptyTitle: { fontSize: 22, fontWeight: 600, margin: '0 0 10px' },
-  emptyDesc: {
-    fontSize: 13, color: '#7d8590', maxWidth: 520, lineHeight: 1.7, margin: 0,
-  },
-  methods: { display: 'flex', gap: 14, marginTop: 28, flexWrap: 'wrap', justifyContent: 'center' },
-  methodCard: {
-    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
-    padding: '18px 28px', borderRadius: 10, border: '1px solid',
-    background: '#161b22', fontSize: 12, fontWeight: 600, fontFamily: 'inherit',
-  },
-
-  // Error
-  errorBar: {
-    background: 'rgba(248,81,73,.1)', border: '1px solid #f85149',
-    color: '#f85149', padding: '12px 16px', borderRadius: 6,
-    fontSize: 13, marginBottom: 16,
-  },
-  errorActions: {
-    display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, flexWrap: 'wrap',
-  },
-  errorLink: {
-    padding: '6px 14px', background: '#f85149', color: '#fff',
-    borderRadius: 6, fontWeight: 700, fontSize: 12, textDecoration: 'none',
-    fontFamily: 'inherit',
-  },
-  errorSwitchBtn: {
-    padding: '6px 12px', background: 'transparent', color: '#7d8590',
-    border: '1px solid #2a3040', borderRadius: 6, fontWeight: 600,
-    fontSize: 11, fontFamily: 'inherit', cursor: 'pointer',
-  },
-
-  // Progress
-  progressBar: {
-    display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px',
-    background: '#161b22', border: '1px solid #2a3040', borderRadius: 8, marginBottom: 12,
-  },
-  progressDot: {
-    width: 12, height: 12, borderRadius: '50%', background: '#58a6ff',
-    animation: 'pulse 1.5s ease infinite', flexShrink: 0,
-  },
-  progressText: { fontSize: 12, color: '#7d8590' },
-
-  // Image
-  imageContainer: {
-    position: 'relative', borderRadius: 10, overflow: 'hidden',
-    border: '1px solid #2a3040', cursor: 'pointer', background: '#000',
-    display: 'inline-block', maxWidth: '100%',
-  },
-  mainImage: { display: 'block', maxWidth: '100%', maxHeight: '75vh', height: 'auto', width: 'auto' },
-  overlayLayer: { position: 'absolute', inset: 0 },
-  capturedOverlay: {
-    position: 'absolute', inset: 0, display: 'flex', alignItems: 'center',
-    justifyContent: 'center', background: 'rgba(14,17,23,.55)',
-    backdropFilter: 'blur(2px)',
-  },
-  bigBtn: {
-    display: 'flex', alignItems: 'center', padding: '16px 36px',
-    background: '#d2a8ff', color: '#0e1117', border: 'none', borderRadius: 8,
-    fontWeight: 700, fontSize: 16, fontFamily: 'inherit', cursor: 'pointer',
-    boxShadow: '0 4px 24px rgba(210,168,255,.3)',
-  },
-  hint: {
-    position: 'absolute', bottom: 12, right: 12,
-    background: 'rgba(14,17,23,.85)', color: '#7d8590',
-    padding: '6px 12px', borderRadius: 6, fontSize: 11,
-    display: 'flex', alignItems: 'center', gap: 6,
-    border: '1px solid #2a3040', pointerEvents: 'none',
-  },
-
-  // Stats
-  stats: { display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' },
-  stat: {
-    fontSize: 11, color: '#7d8590', background: '#161b22',
-    border: '1px solid #2a3040', padding: '4px 10px', borderRadius: 4,
-  },
-
-  // Expanded
-  backdrop: {
-    position: 'fixed', inset: 0, zIndex: 1000,
-    background: 'rgba(2,4,8,.94)', backdropFilter: 'blur(8px)',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    padding: 24, cursor: 'pointer', animation: 'fadeIn .2s ease', overflow: 'auto',
-  },
-  closeBadge: {
-    position: 'fixed', top: 16, right: 20, zIndex: 1010,
-    color: '#7d8590', fontSize: 13, display: 'flex', alignItems: 'center',
-    fontFamily: "'JetBrains Mono', monospace",
-  },
-  expandedWrap: {
-    position: 'relative', maxWidth: '95vw', maxHeight: '92vh',
-    cursor: 'default', borderRadius: 8, overflow: 'hidden',
-    boxShadow: '0 16px 64px rgba(0,0,0,.6)',
-  },
-  expandedImg: {
-    display: 'block', maxWidth: '95vw', maxHeight: '92vh', objectFit: 'contain',
-  },
-
-  // Tooltip
-  tooltip: {
-    position: 'fixed', transform: 'translate(-50%, -100%)',
-    background: '#1c2129', border: '1px solid #2a3040',
-    borderRadius: 10, padding: '12px 16px', zIndex: 9999,
-    boxShadow: '0 12px 40px rgba(0,0,0,.6)',
-    minWidth: 170, maxWidth: 300, pointerEvents: 'none',
-    animation: 'fadeUp .12s ease',
-    fontFamily: "'JetBrains Mono', monospace",
-  },
-  tooltipBackdrop: {
-    position: 'fixed', inset: 0, zIndex: 9998,
-    background: 'rgba(2,4,8,.35)',
-  },
-  tooltipExpanded: {
-    position: 'fixed', left: '50%', top: '50%',
-    transform: 'translate(-50%, -50%)',
-    maxWidth: 900, width: '92vw', maxHeight: '85vh',
-    overflowY: 'auto', pointerEvents: 'auto',
-    borderRadius: 12, padding: '24px 32px',
-    boxShadow: '0 24px 80px rgba(0,0,0,.8)',
-    border: '1px solid #3a4050',
-  },
-  ttWord: { fontSize: 17, fontWeight: 700, color: '#e6edf3', marginBottom: 2 },
-  ttTrans: { fontSize: 14, color: '#58a6ff', fontWeight: 500, marginBottom: 8 },
-  ttEng: {
-    fontSize: 11, color: '#7ee787', fontWeight: 600,
-    textTransform: 'uppercase', letterSpacing: '.08em', marginBottom: 8,
-  },
-  ttSynWrap: { borderTop: '1px solid #2a3040', paddingTop: 8 },
-  ttSynLabel: {
-    fontSize: 9, textTransform: 'uppercase', letterSpacing: '.1em',
-    color: '#7d8590', marginBottom: 6, fontWeight: 600,
-  },
-  ttSynList: { display: 'flex', flexWrap: 'wrap', gap: 4 },
-  ttSynChip: {
-    fontSize: 11, background: 'rgba(88,166,255,.12)', color: '#58a6ff',
-    padding: '3px 8px', borderRadius: 4, fontWeight: 500,
-  },
-  ttConf: {
-    fontSize: 10, color: '#7d8590', marginTop: 8,
-    borderTop: '1px solid #2a3040', paddingTop: 6,
-  },
-  ttClose: {
-    fontSize: 18, color: '#7d8590', cursor: 'pointer', lineHeight: 1,
-    padding: '0 2px', marginLeft: 8,
-  },
-  ttClickHint: {
-    fontSize: 10, color: '#484f58', marginTop: 8,
-    borderTop: '1px solid #2a3040', paddingTop: 6, textAlign: 'center',
-  },
-  ttActions: {
-    marginTop: 8, borderTop: '1px solid #2a3040', paddingTop: 8,
-  },
-  ttExplainBtn: {
-    display: 'flex', alignItems: 'center', width: '100%',
-    padding: '7px 12px', background: 'rgba(88,166,255,.12)', color: '#58a6ff',
-    border: '1px solid rgba(88,166,255,.25)', borderRadius: 6,
-    fontWeight: 600, fontSize: 11, fontFamily: 'inherit', cursor: 'pointer',
-    justifyContent: 'center',
-  },
-  ttExplaining: {
-    display: 'flex', alignItems: 'center', gap: 8,
-    fontSize: 11, color: '#7d8590',
-  },
-  ttExplainingDot: {
-    width: 8, height: 8, borderRadius: '50%', background: '#58a6ff',
-    animation: 'pulse 1.5s ease infinite', flexShrink: 0,
-  },
-  ttExplanation: {
-    fontSize: 14, color: '#c9d1d9', lineHeight: 1.7,
-    background: 'rgba(88,166,255,.06)', borderRadius: 6,
-    padding: '10px 14px', marginTop: 6,
-  },
-  ttBtnRow: {
-    display: 'flex', gap: 6, marginTop: 8,
-  },
-  ttDeepBtn: {
-    flex: 1, padding: '7px 10px', background: 'rgba(210,168,255,.12)', color: '#d2a8ff',
-    border: '1px solid rgba(210,168,255,.25)', borderRadius: 6,
-    fontWeight: 600, fontSize: 11, fontFamily: 'inherit', cursor: 'pointer',
-    textAlign: 'center',
-  },
-  ttStudyBtn: {
-    flex: 1, padding: '7px 10px', background: 'rgba(126,231,135,.12)', color: '#7ee787',
-    border: '1px solid rgba(126,231,135,.25)', borderRadius: 6,
-    fontWeight: 600, fontSize: 11, fontFamily: 'inherit', cursor: 'pointer',
-    textAlign: 'center',
-  },
-  ttDeepExplanation: {
-    fontSize: 14, color: '#c9d1d9', lineHeight: 1.8, whiteSpace: 'pre-wrap',
-    background: 'rgba(210,168,255,.04)', border: '1px solid rgba(210,168,255,.12)',
-    borderRadius: 8, padding: '14px 18px', marginTop: 8,
-  },
-  ttWordStudy: {
-    marginTop: 8, border: '1px solid rgba(126,231,135,.2)',
-    borderRadius: 8, overflow: 'hidden',
-  },
-  ttWordStudyHeader: {
-    fontSize: 12, fontWeight: 700, color: '#7ee787',
-    background: 'rgba(126,231,135,.08)', padding: '8px 10px',
-    borderBottom: '1px solid rgba(126,231,135,.15)',
-  },
-  ttWordStudyBody: {
-    padding: '14px 16px', background: 'rgba(126,231,135,.03)',
-  },
-  ttChatSection: {
-    marginTop: 8, borderTop: '1px solid #2a3040', paddingTop: 8,
-  },
-  ttChatLabel: {
-    fontSize: 9, textTransform: 'uppercase', letterSpacing: '.1em',
-    color: '#7d8590', marginBottom: 6, fontWeight: 600,
-  },
-  ttChatUser: {
-    fontSize: 12, color: '#e6edf3', background: 'rgba(88,166,255,.1)',
-    borderRadius: 6, padding: '6px 10px', marginBottom: 4, textAlign: 'right',
-  },
-  ttChatAssistant: {
-    fontSize: 12, color: '#c9d1d9', background: 'rgba(126,231,135,.06)',
-    borderRadius: 6, padding: '6px 10px', marginBottom: 4, lineHeight: 1.5,
-  },
-  ttChatInputRow: {
-    display: 'flex', gap: 4, marginTop: 4,
-  },
-  ttChatInput: {
-    flex: 1, padding: '6px 8px', background: '#0e1117', color: '#e6edf3',
-    border: '1px solid #2a3040', borderRadius: 6, fontSize: 11,
-    fontFamily: 'inherit', outline: 'none',
-  },
-  ttChatSend: {
-    padding: '6px 10px', background: '#58a6ff', color: '#0e1117',
-    border: 'none', borderRadius: 6, fontWeight: 700, fontSize: 11,
-    fontFamily: 'inherit', cursor: 'pointer',
-  },
-
-  // Drag overlay
-  dragOverlay: {
-    position: 'fixed', inset: 0, zIndex: 100,
-    background: 'rgba(14,17,23,.92)',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-  },
-  dragBox: {
-    border: '2px dashed #58a6ff', borderRadius: 16,
-    padding: '48px 64px', display: 'flex',
-    flexDirection: 'column', alignItems: 'center',
-  },
-}
