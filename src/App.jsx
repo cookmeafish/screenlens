@@ -1159,13 +1159,12 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
       {/* ── Tooltip ──────────────────────────────────────────────────────────── */}
       {activeWord && (() => {
         const hasExpanded = isPinned && (deepExplanation || wordStudy || chatMessages.length > 0)
-        const tooltipStyle = hasExpanded
-          ? { ...S.tooltip, ...S.tooltipExpanded }
-          : { ...S.tooltip, left: tooltipPos.x, top: tooltipPos.y, pointerEvents: isPinned ? 'auto' : 'none',
-              maxHeight: isPinned ? '60vh' : 'none', overflowY: isPinned ? 'auto' : 'visible' }
+        const tooltipStyle = isPinned
+          ? { ...S.tooltip, ...S.tooltipExpanded, ...(hasExpanded ? { maxWidth: 900, width: '92vw' } : { maxWidth: 400, width: 'auto' }) }
+          : { ...S.tooltip, left: tooltipPos.x, top: tooltipPos.y }
         return (
         <>
-        {hasExpanded && (
+        {isPinned && (
           <div style={S.tooltipBackdrop} onClick={dismissPin} />
         )}
         <div style={tooltipStyle} onClick={(e) => e.stopPropagation()}>
@@ -1519,7 +1518,7 @@ const S = {
   },
   tooltipBackdrop: {
     position: 'fixed', inset: 0, zIndex: 9998,
-    background: 'rgba(2,4,8,.7)', backdropFilter: 'blur(4px)',
+    background: 'rgba(2,4,8,.35)',
   },
   tooltipExpanded: {
     position: 'fixed', left: '50%', top: '50%',
