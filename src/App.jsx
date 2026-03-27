@@ -812,6 +812,7 @@ In 1-2 short sentences: what does "${word.text}" mean here and what part of spee
     setAnkiSyncing(true)
     setAnkiError(null)
     try {
+      // Re-check connection
       const connected = await ankiPing()
       setAnkiConnected(connected)
       if (!connected) {
@@ -820,8 +821,22 @@ In 1-2 short sentences: what does "${word.text}" mean here and what part of spee
         setAnkiError(msg)
         return
       }
-      await ankiAddNote(ankiDeck, ankiCard.front, ankiCard.back, ankiCard.tags)
-      console.log('[Anki] card synced successfully to deck:', ankiDeck)
+      // Refresh deck list to make sure target deck exists
+      const decks = await ankiGetDecks().catch(() => [])
+      setAnkiDecks(decks)
+      if (decks.length > 0 && !decks.includes(ankiDeck)) {
+        const msg = `Deck "${ankiDeck}" not found in Anki. Available decks: ${decks.join(', ')}. Select a deck in Anki settings first.`
+        console.log('[Anki] sync failed:', msg)
+        setAnkiError(msg)
+        return
+      }
+      const noteId = await ankiAddNote(ankiDeck, ankiCard.front, ankiCard.back, ankiCard.tags)
+      if (!noteId) {
+        console.error('[Anki] sync failed: no note ID returned')
+        setAnkiError('Failed to add card — Anki returned no note ID')
+        return
+      }
+      console.log('[Anki] card synced successfully, noteId:', noteId, 'deck:', ankiDeck)
       setAnkiSynced((prev) => ({ ...prev, [idx]: true }))
     } catch (err) {
       console.error('[Anki] sync error:', err.message)
@@ -1520,14 +1535,22 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                   <div style={S.ttAnkiCardContent}>{ankiCard.front}</div>
                   <div style={S.ttAnkiCardLabel}>Back</div>
                   <div style={{ ...S.ttAnkiCardContent, whiteSpace: 'pre-line', marginBottom: 4 }}>{ankiCard.back}</div>
+                  <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 6 }}>
+                    Deck: <strong style={{ color: '#58a6ff' }}>{ankiDeck}</strong>
+                    {ankiConnected === false && <span style={{ color: '#d29922', marginLeft: 6 }}>(offline)</span>}
+                    <span style={{ marginLeft: 6, cursor: 'pointer', color: '#58a6ff', textDecoration: 'underline' }} onClick={() => setShowAnkiSettings(true)}>change</span>
+                  </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <button
                       onClick={() => syncToAnki(activeIdx)}
-                      disabled={ankiSyncing}
-                      style={{ ...S.ttAnkiSyncBtn, opacity: ankiSyncing ? 0.5 : 1 }}
+                      disabled={ankiSyncing || ankiConnected === false}
+                      style={{ ...S.ttAnkiSyncBtn, opacity: (ankiSyncing || ankiConnected === false) ? 0.4 : 1 }}
                     >
-                      {ankiSyncing ? 'Syncing...' : `Sync to Anki (${ankiDeck})`}
+                      {ankiSyncing ? 'Syncing...' : 'Sync to Anki'}
                     </button>
+                    {ankiConnected === false && (
+                      <span style={{ fontSize: 10, color: '#d29922' }}>Start Anki to sync</span>
+                    )}
                   </div>
                   {ankiError && (
                     <div style={S.ttAnkiWarning}>{ankiError}</div>
@@ -1536,7 +1559,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
               )}
               {ankiSynced[activeIdx] && (
                 <div style={{ ...S.ttAnkiCard, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={S.ttAnkiSynced}>Synced to Anki</span>
+                  <span style={S.ttAnkiSynced}>Synced to Anki ({ankiDeck})</span>
                 </div>
               )}
 
