@@ -35,6 +35,11 @@ export async function ankiGetDecks() {
   return decks
 }
 
+export async function ankiCreateDeck(deckName) {
+  ankiLog(`creating deck "${deckName}"`)
+  return ankiRequest('createDeck', { deck: deckName })
+}
+
 export async function ankiAddNote(deckName, front, back, tags = []) {
   ankiLog(`adding note to deck "${deckName}"`, { front, back, tags })
   const noteId = await ankiRequest('addNote', {

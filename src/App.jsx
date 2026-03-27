@@ -6,7 +6,7 @@ import { LANGS } from './config/languages'
 import FormattedText from './components/FormattedText'
 import { S } from './styles/theme'
 import { ocrLog, ocrLogTable, ocrLogFlush } from './utils/logger'
-import { ankiPing, ankiGetDecks, ankiAddNote } from './utils/anki'
+import { ankiPing, ankiGetDecks, ankiCreateDeck, ankiAddNote } from './utils/anki'
 
 
 // ─── Image Preprocessing for OCR ────────────────────────────────────────────
@@ -161,6 +161,14 @@ export default function App() {
       if (ok) ankiGetDecks().then((decks) => {
         setAnkiDecks(decks)
         console.log('[Anki] available decks:', decks)
+        // If saved deck doesn't exist in Anki, default to first available
+        setAnkiDeck((current) => {
+          if (decks.length > 0 && !decks.includes(current)) {
+            console.log('[Anki] saved deck not found, defaulting to:', decks[0])
+            return decks[0]
+          }
+          return current
+        })
       }).catch(() => {})
     })
   }, [])
@@ -786,6 +794,10 @@ In 1-2 short sentences: what does "${word.text}" mean here and what part of spee
       const decks = await ankiGetDecks().catch(() => [])
       setAnkiDecks(decks)
       console.log('[Anki] connected, decks:', decks)
+      if (decks.length > 0 && !decks.includes(ankiDeck)) {
+        console.log('[Anki] saved deck not found, defaulting to:', decks[0])
+        setAnkiDeck(decks[0])
+      }
     } else {
       console.log('[Anki] not connected')
     }
@@ -821,21 +833,16 @@ In 1-2 short sentences: what does "${word.text}" mean here and what part of spee
         setAnkiError(msg)
         return
       }
-      // Refresh deck list to make sure target deck exists
+      // Ensure target deck exists — create it if not
       const decks = await ankiGetDecks().catch(() => [])
       setAnkiDecks(decks)
-      if (decks.length > 0 && !decks.includes(ankiDeck)) {
-        const msg = `Deck "${ankiDeck}" not found in Anki. Available decks: ${decks.join(', ')}. Select a deck in Anki settings first.`
-        console.log('[Anki] sync failed:', msg)
-        setAnkiError(msg)
-        return
+      if (!decks.includes(ankiDeck)) {
+        console.log('[Anki] deck not found, creating:', ankiDeck)
+        await ankiCreateDeck(ankiDeck)
+        const updated = await ankiGetDecks().catch(() => [])
+        setAnkiDecks(updated)
       }
       const noteId = await ankiAddNote(ankiDeck, ankiCard.front, ankiCard.back, ankiCard.tags)
-      if (!noteId) {
-        console.error('[Anki] sync failed: no note ID returned')
-        setAnkiError('Failed to add card — Anki returned no note ID')
-        return
-      }
       console.log('[Anki] card synced successfully, noteId:', noteId, 'deck:', ankiDeck)
       setAnkiSynced((prev) => ({ ...prev, [idx]: true }))
     } catch (err) {
