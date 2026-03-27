@@ -174,11 +174,12 @@ export const S = {
   },
   expandedWrap: {
     position: 'relative', maxWidth: '95vw', maxHeight: '92vh',
+    display: 'inline-block',
     cursor: 'default', borderRadius: 8, overflow: 'hidden',
     boxShadow: '0 16px 64px rgba(0,0,0,.6)',
   },
   expandedImg: {
-    display: 'block', maxWidth: '95vw', maxHeight: '92vh', objectFit: 'contain',
+    display: 'block', maxWidth: '95vw', maxHeight: '92vh', width: 'auto', height: 'auto',
   },
 
   // Tooltip
@@ -269,6 +270,35 @@ export const S = {
     border: '1px solid rgba(126,231,135,.25)', borderRadius: 6,
     fontWeight: 600, fontSize: 11, fontFamily: 'inherit', cursor: 'pointer',
     textAlign: 'center',
+  },
+  ttAnkiBtn: {
+    flex: 1, padding: '7px 10px', background: 'rgba(88,166,255,.12)', color: '#58a6ff',
+    border: '1px solid rgba(88,166,255,.25)', borderRadius: 6,
+    fontWeight: 600, fontSize: 11, fontFamily: 'inherit', cursor: 'pointer',
+    textAlign: 'center',
+  },
+  ttAnkiCard: {
+    marginTop: 8, background: 'rgba(88,166,255,.04)',
+    border: '1px solid rgba(88,166,255,.15)', borderRadius: 8,
+    padding: '10px 14px', fontSize: 12, lineHeight: 1.6,
+  },
+  ttAnkiCardLabel: {
+    fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.08em',
+    color: '#7d8590', marginBottom: 2,
+  },
+  ttAnkiCardContent: {
+    color: '#e6edf3', marginBottom: 8,
+  },
+  ttAnkiSyncBtn: {
+    padding: '5px 12px', background: 'rgba(88,166,255,.2)', color: '#58a6ff',
+    border: '1px solid rgba(88,166,255,.3)', borderRadius: 5,
+    fontWeight: 600, fontSize: 10, fontFamily: 'inherit', cursor: 'pointer',
+  },
+  ttAnkiSynced: {
+    fontSize: 10, fontWeight: 600, color: '#7ee787',
+  },
+  ttAnkiWarning: {
+    fontSize: 10, color: '#d29922', marginTop: 6, lineHeight: 1.4,
   },
   ttDeepExplanation: {
     fontSize: 14, color: '#c9d1d9', lineHeight: 1.8, whiteSpace: 'pre-wrap',

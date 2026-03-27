@@ -2,9 +2,11 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import fs from 'fs'
 import path from 'path'
+import http from 'http'
 
 const ENV_FILE = path.resolve('.env')
 const CONFIG_FILE = path.resolve('config.json')
+const LOG_DIR = path.resolve('logs')
 
 function parseEnv() {
   if (!fs.existsSync(ENV_FILE)) return {}
@@ -69,6 +71,60 @@ function apiPlugin() {
               res.statusCode = 400
               res.end('{"error":"invalid json"}')
             }
+          })
+        } else {
+          res.statusCode = 405
+          res.end('')
+        }
+      })
+
+      // Log endpoint — writes OCR pipeline logs to logs/ directory
+      server.middlewares.use('/api/log', (req, res) => {
+        if (req.method === 'POST') {
+          let body = ''
+          req.on('data', (chunk) => { body += chunk })
+          req.on('end', () => {
+            try {
+              if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true })
+              const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+              const logFile = path.join(LOG_DIR, `ocr-${timestamp}.log`)
+              fs.writeFileSync(logFile, body, 'utf-8')
+              res.setHeader('Content-Type', 'application/json')
+              res.end(JSON.stringify({ ok: true, file: logFile }))
+            } catch (e) {
+              res.statusCode = 500
+              res.end(JSON.stringify({ error: e.message }))
+            }
+          })
+        } else {
+          res.statusCode = 405
+          res.end('')
+        }
+      })
+
+      // AnkiConnect proxy endpoint
+      server.middlewares.use('/api/anki', (req, res) => {
+        if (req.method === 'POST') {
+          let body = ''
+          req.on('data', (chunk) => { body += chunk })
+          req.on('end', () => {
+            const ankiReq = http.request(
+              { hostname: '127.0.0.1', port: 8765, method: 'POST', headers: { 'Content-Type': 'application/json' } },
+              (ankiRes) => {
+                let data = ''
+                ankiRes.on('data', (chunk) => { data += chunk })
+                ankiRes.on('end', () => {
+                  res.setHeader('Content-Type', 'application/json')
+                  res.end(data)
+                })
+              }
+            )
+            ankiReq.on('error', () => {
+              res.setHeader('Content-Type', 'application/json')
+              res.end(JSON.stringify({ error: 'Anki is not running or AnkiConnect is not installed' }))
+            })
+            ankiReq.write(body)
+            ankiReq.end()
           })
         } else {
           res.statusCode = 405

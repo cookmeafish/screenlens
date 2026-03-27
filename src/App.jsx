@@ -5,6 +5,8 @@ import { PROVIDERS } from './config/providers'
 import { LANGS } from './config/languages'
 import FormattedText from './components/FormattedText'
 import { S } from './styles/theme'
+import { ocrLog, ocrLogTable, ocrLogFlush } from './utils/logger'
+import { ankiPing, ankiGetDecks, ankiAddNote } from './utils/anki'
 
 
 // ─── Image Preprocessing for OCR ────────────────────────────────────────────
@@ -27,27 +29,26 @@ async function preprocessForOCR(dataUrl) {
         d[i] = d[i + 1] = d[i + 2] = gray
       }
 
-      // Step 2: Detect if background is dark (average brightness)
+      // Step 2: Detect if background is dark
       let totalBrightness = 0
       const pixelCount = d.length / 4
       for (let i = 0; i < d.length; i += 4) totalBrightness += d[i]
       const avgBrightness = totalBrightness / pixelCount
       const isDark = avgBrightness < 128
 
-      // Step 3: Contrast enhancement (stronger for dark images)
-      const factor = isDark ? 2.2 : 1.5
+      // Step 3: Contrast enhancement
+      const factor = isDark ? 1.8 : 1.4
       for (let i = 0; i < d.length; i += 4) {
         const val = (d[i] - 128) * factor + 128
         d[i] = d[i + 1] = d[i + 2] = Math.max(0, Math.min(255, val))
       }
 
-      // Step 4: Adaptive thresholding (local neighborhood comparison)
-      // Use a simplified approach: compare each pixel to its local average
+      // Step 4: Adaptive thresholding
       const w = c.width, h = c.height
       const gray = new Uint8Array(pixelCount)
       for (let i = 0; i < pixelCount; i++) gray[i] = d[i * 4]
 
-      const blockSize = Math.max(15, Math.round(Math.min(w, h) / 50) | 1) // odd number
+      const blockSize = Math.max(15, Math.round(Math.min(w, h) / 50) | 1)
       const half = blockSize >> 1
       const threshold = new Uint8Array(pixelCount)
 
@@ -71,7 +72,6 @@ async function preprocessForOCR(dataUrl) {
             - integral[(y1 + 1) * (w + 1) + x0]
             + integral[y0 * (w + 1) + x0]
           const localMean = sum / count
-          // Pixel is text if it's significantly different from local mean
           const offset = isDark ? -15 : 15
           threshold[y * w + x] = gray[y * w + x] > localMean - offset ? 255 : 0
         }
@@ -123,6 +123,14 @@ export default function App() {
   const [showHighlights, setShowHighlights] = useState(true)
   const [language, setLanguage] = useState('auto')
   const [targetLang, setTargetLang] = useState('eng')
+  const [ankiConnected, setAnkiConnected] = useState(null)
+  const [ankiDeck, setAnkiDeck] = useState('ScreenLens')
+  const [ankiDecks, setAnkiDecks] = useState([])
+  const [ankiCard, setAnkiCard] = useState(null)
+  const [ankiSynced, setAnkiSynced] = useState({})
+  const [ankiSyncing, setAnkiSyncing] = useState(false)
+  const [ankiError, setAnkiError] = useState(null)
+  const [showAnkiSettings, setShowAnkiSettings] = useState(false)
 
   const fileInputRef = useRef(null)
   const containerRef = useRef(null)
@@ -141,8 +149,19 @@ export default function App() {
       if (config.language) setLanguage(config.language)
       if (config.targetLang) setTargetLang(config.targetLang)
       if (config.showHighlights !== undefined) setShowHighlights(config.showHighlights)
+      if (config.ankiDeck) setAnkiDeck(config.ankiDeck)
       setKeysLoaded(true)
       setConfigLoaded(true)
+    })
+    // Check AnkiConnect on mount
+    console.log('[Anki] checking connection on mount...')
+    ankiPing().then((ok) => {
+      setAnkiConnected(ok)
+      console.log('[Anki] mount check:', ok ? 'connected' : 'not connected')
+      if (ok) ankiGetDecks().then((decks) => {
+        setAnkiDecks(decks)
+        console.log('[Anki] available decks:', decks)
+      }).catch(() => {})
     })
   }, [])
 
@@ -162,9 +181,9 @@ export default function App() {
     fetch('/api/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider, language, targetLang, showHighlights }),
+      body: JSON.stringify({ provider, language, targetLang, showHighlights, ankiDeck }),
     }).catch(() => {})
-  }, [provider, language, targetLang, showHighlights, configLoaded])
+  }, [provider, language, targetLang, showHighlights, ankiDeck, configLoaded])
 
   const setCurrentKey = (key) => {
     setApiKeys((prev) => ({ ...prev, [provider]: key }))
@@ -248,13 +267,18 @@ export default function App() {
       // ── Stage 1: Tesseract OCR ──────────────────────────────────────────────
       setProgress('Initializing OCR engine…')
 
+      // Get real image dimensions (don't rely on imgDims state which can be stale)
+      const dimImg = new Image()
+      await new Promise((resolve) => { dimImg.onload = resolve; dimImg.src = dataUrl })
+      const realW = dimImg.naturalWidth, realH = dimImg.naturalHeight
+
       // Downscale for OCR if wider than 1920px (speeds up Tesseract, display stays full-res)
       let ocrInput = dataUrl
-      if (imgDims.w > 1920) {
-        const scale = 1920 / imgDims.w
+      if (realW > 1920) {
+        const scale = 1920 / realW
         const c = document.createElement('canvas')
         c.width = 1920
-        c.height = Math.round(imgDims.h * scale)
+        c.height = Math.round(realH * scale)
         const ctx = c.getContext('2d')
         const img = new Image()
         await new Promise((resolve) => { img.onload = resolve; img.src = dataUrl })
@@ -278,23 +302,59 @@ export default function App() {
       })
 
       // Scale bounding boxes back to original resolution if we downscaled
-      const bboxScale = imgDims.w > 1920 ? imgDims.w / 1920 : 1
-      const rawWords = (result.data.words || [])
+      const bboxScale = realW > 1920 ? realW / 1920 : 1
+
+      // ── Log: Raw Tesseract output ──
+      const allTessWords = (result.data.words || [])
+      ocrLog(`Image: ${realW}x${realH}, bboxScale=${bboxScale.toFixed(2)}`)
+      ocrLog(`Tesseract returned ${allTessWords.length} raw words`)
+      ocrLogTable('Raw Tesseract words', allTessWords.map((w) => ({
+        text: w.text.trim(),
+        conf: Math.round(w.confidence),
+        x0: w.bbox.x0, y0: w.bbox.y0, x1: w.bbox.x1, y1: w.bbox.y1,
+        w: w.bbox.x1 - w.bbox.x0, h: w.bbox.y1 - w.bbox.y0,
+      })))
+
+      const rawWords = allTessWords
         .filter((w) => {
           const t = w.text.trim()
           if (t.length === 0) return false
-          // Must contain at least one letter
           if (!/[a-zA-ZÀ-ÿ]/.test(t)) return false
-          // Count actual letters (not symbols/digits)
-          const letterCount = (t.match(/[a-zA-ZÀ-ÿ]/g) || []).length
-          if (letterCount === 0) return false
-          // Short words need higher confidence to avoid noise
-          const minConf = letterCount === 1 ? 85 : t.length <= 2 ? 70 : t.length <= 3 ? 45 : 25
-          if (w.confidence < minConf) return false
+          // Clean text first (strip leading/trailing non-letters) — use cleaned length for thresholds
+          const cleaned = t.replace(/^[^a-zA-ZÀ-ÿ]+|[^a-zA-ZÀ-ÿ]+$/g, '') || t
+          const letterCount = (cleaned.match(/[a-zA-ZÀ-ÿ]/g) || []).length
+          if (letterCount < 2) {
+            if (letterCount === 1 && w.confidence >= 85) return true
+            return false
+          }
+          const minConf = cleaned.length <= 2 ? 70 : cleaned.length <= 3 ? 55 : 50
+          if (w.confidence < minConf) {
+            ocrLog(`[FILTERED conf] "${cleaned}" conf=${Math.round(w.confidence)} < ${minConf}`)
+            return false
+          }
+          const bw = w.bbox.x1 - w.bbox.x0, bh = w.bbox.y1 - w.bbox.y0
+          if (bw > 0 && bh > 0 && (bw / bh > 15 || bh / bw > 5)) {
+            ocrLog(`[FILTERED shape] "${cleaned}" aspect=${(bw/bh).toFixed(1)} (${bw}x${bh})`)
+            return false
+          }
+          if (bw < 10 || bh < 10) {
+            ocrLog(`[FILTERED tiny] "${cleaned}" (${bw}x${bh})`)
+            return false
+          }
+          // Reject oversized bboxes (UI banners, not individual words)
+          const scaledBw = bw * bboxScale, scaledBh = bh * bboxScale
+          if (scaledBw * scaledBh > realW * realH * 0.05) {
+            ocrLog(`[FILTERED huge] "${cleaned}" covers ${((scaledBw*scaledBh)/(realW*realH)*100).toFixed(1)}% of image`)
+            return false
+          }
+          if (scaledBw > realW * 0.4) {
+            ocrLog(`[FILTERED wide] "${cleaned}" width=${Math.round(scaledBw)} > 40% of image`)
+            return false
+          }
           return true
         })
         .map((w) => ({
-          text: w.text.trim(),
+          text: w.text.trim().replace(/^[^a-zA-ZÀ-ÿ]+|[^a-zA-ZÀ-ÿ]+$/g, '') || w.text.trim(),
           bbox: {
             x0: Math.round(w.bbox.x0 * bboxScale),
             y0: Math.round(w.bbox.y0 * bboxScale),
@@ -304,28 +364,50 @@ export default function App() {
           confidence: w.confidence,
         }))
 
-      // Merge adjacent fragments that are very close horizontally (same word split by color/style)
-      const merged = []
-      for (let j = 0; j < rawWords.length; j++) {
-        const w = rawWords[j]
-        if (merged.length > 0) {
-          const prev = merged[merged.length - 1]
-          const gap = w.bbox.x0 - prev.bbox.x1
-          const avgHeight = ((prev.bbox.y1 - prev.bbox.y0) + (w.bbox.y1 - w.bbox.y0)) / 2
-          const sameRow = Math.abs(w.bbox.y0 - prev.bbox.y0) < avgHeight * 0.5
-          // If gap is very small (< 30% of char height) and same row, merge
-          if (sameRow && gap >= 0 && gap < avgHeight * 0.3) {
-            prev.text += w.text
-            prev.bbox.x1 = w.bbox.x1
-            prev.bbox.y0 = Math.min(prev.bbox.y0, w.bbox.y0)
-            prev.bbox.y1 = Math.max(prev.bbox.y1, w.bbox.y1)
-            prev.confidence = Math.min(prev.confidence, w.confidence)
-            continue
+      ocrLogTable(`After filtering: ${rawWords.length} words`, rawWords.map((w) => ({ text: w.text, conf: Math.round(w.confidence), ...w.bbox })))
+
+      // Deduplicate overlapping bounding boxes (Tesseract can detect the same
+      // text region multiple times). Keep the higher-confidence read.
+      const deduped = []
+      for (const w of rawWords) {
+        const area = (w.bbox.x1 - w.bbox.x0) * (w.bbox.y1 - w.bbox.y0)
+        let dominated = false
+        for (let k = deduped.length - 1; k >= 0; k--) {
+          const d = deduped[k]
+          const ix0 = Math.max(w.bbox.x0, d.bbox.x0)
+          const iy0 = Math.max(w.bbox.y0, d.bbox.y0)
+          const ix1 = Math.min(w.bbox.x1, d.bbox.x1)
+          const iy1 = Math.min(w.bbox.y1, d.bbox.y1)
+          if (ix0 >= ix1 || iy0 >= iy1) continue
+          const inter = (ix1 - ix0) * (iy1 - iy0)
+          const dArea = (d.bbox.x1 - d.bbox.x0) * (d.bbox.y1 - d.bbox.y0)
+          // Use IoU (intersection-over-union) so large bad bboxes don't eat valid words
+          const iou = inter / (area + dArea - inter)
+          if (iou > 0.4) {
+            if (w.confidence > d.confidence) {
+              ocrLog(`[DEDUP] "${d.text}" (${Math.round(d.confidence)}%) replaced by "${w.text}" (${Math.round(w.confidence)}%) IoU=${(iou*100).toFixed(0)}%`)
+              deduped.splice(k, 1)
+            } else {
+              ocrLog(`[DEDUP] "${w.text}" (${Math.round(w.confidence)}%) dropped, kept "${d.text}" (${Math.round(d.confidence)}%) IoU=${(iou*100).toFixed(0)}%`)
+              dominated = true
+              break
+            }
           }
         }
-        merged.push({ ...w, bbox: { ...w.bbox } })
+        if (!dominated) deduped.push(w)
       }
-      const finalWords = merged
+
+      // Sort in reading order (top-to-bottom, left-to-right) so the AI receives
+      // consecutive fragments as consecutive indices for "m" merge detection
+      deduped.sort((a, b) => {
+        const avgH = ((a.bbox.y1 - a.bbox.y0) + (b.bbox.y1 - b.bbox.y0)) / 2
+        if (Math.abs(a.bbox.y0 - b.bbox.y0) < avgH * 0.5) return a.bbox.x0 - b.bbox.x0
+        return a.bbox.y0 - b.bbox.y0
+      })
+
+      ocrLogTable(`After dedup + sort: ${deduped.length} words (final)`, deduped.map((w) => ({ text: w.text, conf: Math.round(w.confidence), ...w.bbox })))
+
+      const finalWords = deduped
 
       if (finalWords.length === 0) {
         setError('No readable text found. Try a different language or a clearer screenshot.')
@@ -357,8 +439,8 @@ export default function App() {
         const text = await providerConfig.call(apiKey, TRANSLATE_PROMPT, payload)
         if (!text) throw new Error('Empty translation response')
 
-        console.log('[ScreenLens] Chunk', i, 'sent:', indexedWords.length, 'words')
-        console.log('[ScreenLens] AI returned:', text.slice(0, 300))
+        ocrLog(`Chunk ${i}: sent ${indexedWords.length} words`)
+        ocrLog(`AI returned: ${text.slice(0, 300)}`)
 
         // Extract JSON from response — handle markdown wrapping, preamble, etc.
         let cleaned = text
@@ -389,7 +471,7 @@ export default function App() {
           try {
             parsed = JSON.parse(r)
           } catch (e2) {
-            console.error('[ScreenLens] JSON repair failed:', e2.message, '\nRaw:', text.slice(0, 500))
+            ocrLog(`[ERROR] JSON repair failed: ${e2.message}\nRaw: ${text.slice(0, 500)}`)
             // Last resort: skip this chunk, words will be retried via lazy translate
             continue
           }
@@ -436,6 +518,50 @@ export default function App() {
         }
       }
 
+      // ── AI-driven fragment merge ─────────────────────────────────────────
+      // The AI detects OCR fragments via "m" field (e.g. "Sob"+"reguardia" → "Sobreguardia")
+      // Only merge if words are spatially adjacent (same row, close horizontally)
+      const mergedAway = new Set() // indices to hide (absorbed into another word)
+      for (const [, item] of Object.entries(allTranslations)) {
+        if (item.m && Array.isArray(item.m) && item.m.length > 1) {
+          const indices = item.m.filter((idx) => idx >= 0 && idx < finalWords.length)
+          if (indices.length < 2) continue
+          indices.sort((a, b) => a - b)
+          // Verify spatial adjacency — all words must be on the same row and close together
+          let spatiallyValid = true
+          for (let k = 1; k < indices.length; k++) {
+            const prev = finalWords[indices[k - 1]].bbox
+            const curr = finalWords[indices[k]].bbox
+            const avgH = ((prev.y1 - prev.y0) + (curr.y1 - curr.y0)) / 2
+            const sameRow = Math.abs(prev.y0 - curr.y0) < avgH * 0.6
+            const gap = curr.x0 - prev.x1
+            const closeEnough = gap < avgH * 2 // within 2x char height
+            if (!sameRow || !closeEnough) {
+              ocrLog(`[AI MERGE REJECTED] "${finalWords[indices[k-1]].text}" + "${finalWords[indices[k]].text}" not spatially adjacent (sameRow=${sameRow}, gap=${gap})`)
+              spatiallyValid = false
+              break
+            }
+          }
+          if (!spatiallyValid) continue
+          const first = indices[0]
+          const mergedText = indices.map((idx) => finalWords[idx].text).join('')
+          const mergedBbox = {
+            x0: Math.min(...indices.map((idx) => finalWords[idx].bbox.x0)),
+            y0: Math.min(...indices.map((idx) => finalWords[idx].bbox.y0)),
+            x1: Math.max(...indices.map((idx) => finalWords[idx].bbox.x1)),
+            y1: Math.max(...indices.map((idx) => finalWords[idx].bbox.y1)),
+          }
+          ocrLog(`[AI MERGE] ${indices.map((i) => `"${finalWords[i].text}"`).join(' + ')} → "${mergedText}" (translation: "${item.t}")`)
+          finalWords[first] = { ...finalWords[first], text: mergedText, bbox: mergedBbox }
+          for (let k = 1; k < indices.length; k++) {
+            mergedAway.add(indices[k])
+          }
+        }
+      }
+      if (mergedAway.size > 0) {
+        ocrLog(`Merged away ${mergedAway.size} fragment(s): indices ${[...mergedAway].join(', ')}`)
+      }
+
       // ── Quick gap check: fill any missing indices ──────────────────────────
       const missing = []
       for (let i = 0; i < finalWords.length; i++) {
@@ -445,28 +571,34 @@ export default function App() {
         }
       }
       if (missing.length > 0) {
-        console.warn(`[ScreenLens] ${missing.length} words had no translation, will translate on hover:`, missing.map((i) => finalWords[i].text))
+        ocrLog(`${missing.length} words had no translation, will translate on hover: ${missing.map((i) => finalWords[i].text).join(', ')}`)
       }
 
-      // ── Merge OCR + Translation (matched by index, can't shift) ─────────────
-      const translatedWords = finalWords.map((w, i) => {
-        const t = allTranslations[String(i)]
-        // Backward compat: map old e:true to category 'target'
-        const category = t.c || (t.e === true ? 'target' : 'foreign')
-        const partOfSpeech = t.p || 'other'
-        return {
-          text: w.text,
-          bbox: w.bbox,
-          confidence: w.confidence,
-          translation: t.t || w.text,
-          synonyms: t.s || [],
-          category,
-          partOfSpeech,
-          pronunciation: t.r || '',
-          isEnglish: category === 'target',
-          _untranslated: t._untranslated || false,
-        }
-      })
+      // ── Merge OCR + Translation (matched by index) ─────────────────────────
+      // Skip fragments that were merged into another word by the AI
+      const translatedWords = finalWords
+        .map((w, i) => {
+          if (mergedAway.has(i)) return null // absorbed into another word
+          const t = allTranslations[String(i)]
+          const category = t.c || (t.e === true ? 'target' : 'foreign')
+          const partOfSpeech = t.p || 'other'
+          return {
+            text: w.text,
+            bbox: w.bbox,
+            confidence: w.confidence,
+            translation: t.t || w.text,
+            synonyms: t.s || [],
+            category,
+            partOfSpeech,
+            pronunciation: t.r || '',
+            isEnglish: category === 'target',
+            _untranslated: t._untranslated || false,
+          }
+        })
+        .filter(Boolean)
+
+      ocrLog(`Pipeline complete: ${translatedWords.length} words`)
+      ocrLogFlush() // Write logs to logs/ directory
 
       setOcrWords(translatedWords)
       setStage('done')
@@ -476,6 +608,8 @@ export default function App() {
         missing.forEach((idx) => lazyTranslate(idx))
       }
     } catch (err) {
+      ocrLog(`[ERROR] ${err.message}`)
+      ocrLogFlush()
       console.error(err)
       setError('Analysis failed: ' + err.message)
       setStage('captured')
@@ -570,8 +704,19 @@ export default function App() {
     if (pinnedIdx !== null) return // don't override pinned tooltip
     setHoveredIdx(idx)
     const rect = e.currentTarget.getBoundingClientRect()
-    setTooltipPos({ x: rect.left + rect.width / 2, y: rect.top - 6 })
-    // If this word wasn't translated, translate it now
+    // Smart positioning: avoid going off screen
+    const vw = window.innerWidth, vh = window.innerHeight
+    let x = rect.left + rect.width / 2
+    let y = rect.top - 6
+    let anchor = 'above' // default: tooltip above word
+    // If word is near top, show tooltip below
+    if (rect.top < 150) {
+      y = rect.bottom + 6
+      anchor = 'below'
+    }
+    // Clamp horizontal to keep tooltip on screen
+    x = Math.max(160, Math.min(vw - 160, x))
+    setTooltipPos({ x, y, anchor })
     if (ocrWords[idx]?._untranslated) lazyTranslate(idx)
   }
 
@@ -591,15 +736,11 @@ export default function App() {
       setExplanation(null)
       setDeepExplanation(null)
       setWordStudy(null); setConjugation(null)
+      setAnkiCard(null); setAnkiError(null)
       setChatMessages([])
       setChatInput('')
       const rect = e.currentTarget.getBoundingClientRect()
       setTooltipPos({ x: rect.left + rect.width / 2, y: rect.top - 6 })
-      // Auto-trigger short explanation
-      const word = ocrWords[idx]
-      if (word) {
-        autoExplain(word)
-      }
     }
   }
 
@@ -608,6 +749,7 @@ export default function App() {
     setExplanation(null)
     setDeepExplanation(null)
     setWordStudy(null); setConjugation(null)
+    setAnkiCard(null); setAnkiError(null)
     setChatMessages([])
     setChatInput('')
     setHoveredIdx(null)
@@ -633,6 +775,61 @@ In 1-2 short sentences: what does "${word.text}" mean here and what part of spee
       setExplaining(false)
     }
   }, [apiKey, ocrWords, providerConfig])
+
+  // ─── Anki Connection & Card Sync ─────────────────────────────────────────
+  const refreshAnkiConnection = async () => {
+    console.log('[Anki] refreshing connection...')
+    setAnkiConnected(null)
+    const ok = await ankiPing()
+    setAnkiConnected(ok)
+    if (ok) {
+      const decks = await ankiGetDecks().catch(() => [])
+      setAnkiDecks(decks)
+      console.log('[Anki] connected, decks:', decks)
+    } else {
+      console.log('[Anki] not connected')
+    }
+  }
+
+  const generateAnkiCard = (word) => {
+    const front = word.pronunciation
+      ? `${word.text} (${word.pronunciation})`
+      : word.text
+    const backParts = [word.translation]
+    if (word.synonyms?.length) backParts.push(`Synonyms: ${word.synonyms.join(', ')}`)
+    if (word.partOfSpeech) backParts.push(`(${word.partOfSpeech})`)
+    const back = backParts.join('\n')
+    const langLabel = LANGS.find((l) => l.code === language)?.label || language
+    const tags = ['screenlens', langLabel.toLowerCase()]
+    console.log('[Anki] card generated', { front, back, tags })
+    setAnkiCard({ front, back, tags })
+    setAnkiError(null)
+  }
+
+  const syncToAnki = async (idx) => {
+    if (!ankiCard || ankiSyncing) return
+    console.log('[Anki] syncing card to deck:', ankiDeck)
+    setAnkiSyncing(true)
+    setAnkiError(null)
+    try {
+      const connected = await ankiPing()
+      setAnkiConnected(connected)
+      if (!connected) {
+        const msg = 'Anki is not running — open Anki with AnkiConnect addon to sync'
+        console.log('[Anki] sync failed:', msg)
+        setAnkiError(msg)
+        return
+      }
+      await ankiAddNote(ankiDeck, ankiCard.front, ankiCard.back, ankiCard.tags)
+      console.log('[Anki] card synced successfully to deck:', ankiDeck)
+      setAnkiSynced((prev) => ({ ...prev, [idx]: true }))
+    } catch (err) {
+      console.error('[Anki] sync error:', err.message)
+      setAnkiError(err.message)
+    } finally {
+      setAnkiSyncing(false)
+    }
+  }
 
   // ─── Deep Explain (uses Sonnet for thorough breakdown) ────────────────────
   const deepExplain = useCallback(async (word) => {
@@ -774,11 +971,47 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
   // ─── Word Overlay Renderer ─────────────────────────────────────────────────
   const renderWordOverlays = () => {
     if (!imgDims.w || !imgDims.h) return null
+
+    // Pre-compute corrected bboxes:
+    // 1. Estimate expected width from per-char metrics to fix narrow bboxes (e.g. "Tiempo" missing "o")
+    // 2. Clamp same-row overlaps so adjacent words don't visually bleed into each other
+    const boxes = ocrWords.map((word) => {
+      let x0 = word.bbox.x0, y0 = word.bbox.y0, x1 = word.bbox.x1, y1 = word.bbox.y1
+      const bboxW = x1 - x0
+      const bboxH = y1 - y0
+      const charCount = word.text.length
+      if (charCount > 0 && bboxH > 0) {
+        // Expected width based on character count and height (typical char aspect ~0.55)
+        const expectedW = charCount * bboxH * 0.55
+        if (expectedW > bboxW * 1.15) {
+          // Bbox is suspiciously narrow for this word — extend right edge
+          x1 = Math.round(x0 + expectedW)
+        }
+      }
+      return { x0, y0, x1, y1 }
+    })
+
+    // Clamp same-row overlaps: if two words overlap horizontally, trim the left one's right edge
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) {
+        const a = boxes[i], b = boxes[j]
+        const avgH = ((a.y1 - a.y0) + (b.y1 - b.y0)) / 2
+        if (Math.abs(a.y0 - b.y0) > avgH * 0.5) continue // different row
+        // Same row — if they overlap, trim
+        if (a.x1 > b.x0 && a.x0 < b.x0) {
+          a.x1 = b.x0 - 1
+        } else if (b.x1 > a.x0 && b.x0 < a.x0) {
+          b.x1 = a.x0 - 1
+        }
+      }
+    }
+
     return ocrWords.map((word, i) => {
-      const x = (word.bbox.x0 / imgDims.w) * 100
-      const y = (word.bbox.y0 / imgDims.h) * 100
-      const w = ((word.bbox.x1 - word.bbox.x0) / imgDims.w) * 100
-      const h = ((word.bbox.y1 - word.bbox.y0) / imgDims.h) * 100
+      const box = boxes[i]
+      const x = (box.x0 / imgDims.w) * 100
+      const y = (box.y0 / imgDims.h) * 100
+      const w = Math.max(0, ((box.x1 - box.x0) / imgDims.w) * 100)
+      const h = Math.max(0, ((box.y1 - box.y0) / imgDims.h) * 100)
       const isActive = hoveredIdx === i || pinnedIdx === i
       const isPinned = pinnedIdx === i
 
@@ -903,6 +1136,14 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
             ))}
           </select>
 
+          <button onClick={() => setShowAnkiSettings(!showAnkiSettings)} style={{
+            ...S.ghostBtn,
+            color: ankiConnected ? '#58a6ff' : ankiConnected === false ? '#d29922' : '#7d8590',
+            borderColor: ankiConnected ? 'rgba(88,166,255,0.25)' : ankiConnected === false ? 'rgba(210,153,34,0.25)' : '#2a3040',
+          }}>
+            {ankiConnected ? `Anki: ${ankiDeck}` : ankiConnected === false ? 'Anki Offline' : 'Anki...'}
+          </button>
+
           <button onClick={() => setShowKeyInput(!showKeyInput)} style={{
             ...S.ghostBtn,
             color: apiKey ? '#7ee787' : '#f85149',
@@ -955,6 +1196,36 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
             {apiKey ? 'Done' : 'Close'}
           </button>
           <span style={{ fontSize: 11, color: '#7d8590' }}>Stored in localStorage only</span>
+        </div>
+      )}
+
+      {showAnkiSettings && (
+        <div style={S.keyBar}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: ankiConnected ? '#58a6ff' : ankiConnected === false ? '#d29922' : '#7d8590', flexShrink: 0 }} />
+            <label style={S.keyLabel}>
+              {ankiConnected ? 'Connected' : ankiConnected === false ? 'Not connected' : 'Checking...'}
+            </label>
+          </div>
+          {ankiConnected && ankiDecks.length > 0 && (
+            <>
+              <label style={{ fontSize: 12, color: '#7d8590' }}>Deck:</label>
+              <select
+                value={ankiDeck}
+                onChange={(e) => setAnkiDeck(e.target.value)}
+                style={{ ...S.select, minWidth: 150 }}
+              >
+                {ankiDecks.map((d) => <option key={d} value={d}>{d}</option>)}
+              </select>
+            </>
+          )}
+          <button onClick={refreshAnkiConnection} style={S.getKeyLink}>
+            {ankiConnected === null ? 'Checking...' : 'Refresh'}
+          </button>
+          <button onClick={() => setShowAnkiSettings(false)} style={S.keyDone}>Done</button>
+          <span style={{ fontSize: 11, color: '#7d8590' }}>
+            Requires Anki with AnkiConnect addon (code: 2055492159)
+          </span>
         </div>
       )}
 
@@ -1116,9 +1387,12 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
       {/* ── Tooltip ──────────────────────────────────────────────────────────── */}
       {activeWord && (() => {
         const hasExpanded = isPinned && (deepExplanation || wordStudy || chatMessages.length > 0)
+        const hoverTransform = tooltipPos.anchor === 'below'
+          ? 'translate(-50%, 0)' // tooltip below word
+          : 'translate(-50%, -100%)' // tooltip above word (default)
         const tooltipStyle = isPinned
           ? { ...S.tooltip, ...S.tooltipExpanded, ...(hasExpanded ? { maxWidth: 900, width: '92vw' } : { maxWidth: 400, width: 'auto' }) }
-          : { ...S.tooltip, left: tooltipPos.x, top: tooltipPos.y }
+          : { ...S.tooltip, left: tooltipPos.x, top: tooltipPos.y, transform: hoverTransform }
         return (
         <>
         {isPinned && (
@@ -1171,10 +1445,32 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
           )}
           <div style={S.ttConf}>OCR confidence: {Math.round(activeWord.confidence)}%</div>
 
-          {/* Pinned: short explanation (auto-loaded) */}
+          {/* Pinned: actions */}
           {isPinned && (
             <div style={S.ttActions}>
-              {explaining && (
+              {/* Primary button row — always visible when pinned */}
+              <div style={S.ttBtnRow}>
+                {!explanation && (
+                  <button
+                    onClick={() => autoExplain(activeWord)}
+                    disabled={explaining}
+                    style={{ ...S.ttDeepBtn, opacity: explaining ? 0.5 : 1 }}
+                  >
+                    {explaining ? 'Thinking...' : 'Explain'}
+                  </button>
+                )}
+                {!ankiCard && !ankiSynced[activeIdx] && (
+                  <button
+                    onClick={() => generateAnkiCard(activeWord)}
+                    style={S.ttAnkiBtn}
+                  >
+                    Generate Anki Card
+                  </button>
+                )}
+              </div>
+
+              {/* Explanation result */}
+              {explaining && !explanation && (
                 <div style={S.ttExplaining}>
                   <div style={S.ttExplainingDot} />
                   Thinking...
@@ -1184,7 +1480,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                 <div style={S.ttExplanation}>{explanation}</div>
               )}
 
-              {/* Action buttons row */}
+              {/* Secondary buttons — after explanation */}
               {explanation && (
                 <div style={S.ttBtnRow}>
                   {!deepExplanation && (
@@ -1214,6 +1510,33 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                       {conjugationLoading ? 'Loading...' : 'Conjugate'}
                     </button>
                   )}
+                </div>
+              )}
+
+              {/* Anki card preview */}
+              {ankiCard && !ankiSynced[activeIdx] && (
+                <div style={S.ttAnkiCard}>
+                  <div style={S.ttAnkiCardLabel}>Front</div>
+                  <div style={S.ttAnkiCardContent}>{ankiCard.front}</div>
+                  <div style={S.ttAnkiCardLabel}>Back</div>
+                  <div style={{ ...S.ttAnkiCardContent, whiteSpace: 'pre-line', marginBottom: 4 }}>{ankiCard.back}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <button
+                      onClick={() => syncToAnki(activeIdx)}
+                      disabled={ankiSyncing}
+                      style={{ ...S.ttAnkiSyncBtn, opacity: ankiSyncing ? 0.5 : 1 }}
+                    >
+                      {ankiSyncing ? 'Syncing...' : `Sync to Anki (${ankiDeck})`}
+                    </button>
+                  </div>
+                  {ankiError && (
+                    <div style={S.ttAnkiWarning}>{ankiError}</div>
+                  )}
+                </div>
+              )}
+              {ankiSynced[activeIdx] && (
+                <div style={{ ...S.ttAnkiCard, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={S.ttAnkiSynced}>Synced to Anki</span>
                 </div>
               )}
 

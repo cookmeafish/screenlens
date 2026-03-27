@@ -67,6 +67,26 @@ The app calls AI provider APIs directly from the browser. Your keys are stored i
 
 For production use, you'd want to proxy through a backend. For personal local use, direct browser access is fine.
 
+## Anki Integration
+
+ScreenLens can create flashcards and sync them directly to [Anki](https://apps.ankiweb.net/) for spaced repetition study.
+
+### Setup
+
+1. Install [Anki](https://apps.ankiweb.net/) desktop app
+2. Open Anki → **Tools → Add-ons → Get Add-ons...**
+3. Paste the addon code: **`2055492159`** ([AnkiConnect](https://ankiweb.net/shared/info/2055492159))
+4. Click **OK** and **restart Anki**
+
+### Usage
+
+1. Keep Anki running in the background while using ScreenLens
+2. Click a translated word to pin it
+3. Click **Generate Anki Card** to preview the flashcard (front/back)
+4. Click **Sync to Anki** to push the card to your selected deck
+
+If Anki is not running, cards can still be generated and previewed — a warning will appear when you try to sync. The deck selector in the header lets you choose which Anki deck to send cards to.
+
 ## Requirements
 
 - Node.js 18+
