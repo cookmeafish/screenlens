@@ -71,3 +71,9 @@ export async function ankiAnswerCards(answers) {
   ankiLog(`answering ${answers.length} cards`, answers)
   return ankiRequest('answerCards', { answers })
 }
+
+export async function ankiSync() {
+  ankiLog('triggering sync to AnkiWeb...')
+  await ankiRequest('sync')
+  ankiLog('sync complete')
+}

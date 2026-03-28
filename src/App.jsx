@@ -6,7 +6,7 @@ import { LANGS } from './config/languages'
 import FormattedText from './components/FormattedText'
 import { S } from './styles/theme'
 import { ocrLog, ocrLogTable, ocrLogFlush } from './utils/logger'
-import { ankiPing, ankiGetDecks, ankiCreateDeck, ankiAddNote, ankiFindCards, ankiCardsInfo, ankiAnswerCards } from './utils/anki'
+import { ankiPing, ankiGetDecks, ankiCreateDeck, ankiAddNote, ankiFindCards, ankiCardsInfo, ankiAnswerCards, ankiSync } from './utils/anki'
 
 
 // ─── Image Preprocessing for OCR ────────────────────────────────────────────
@@ -134,12 +134,14 @@ export default function App() {
   const [showAnkiSettings, setShowAnkiSettings] = useState(false)
   const defaultStudyRules = {
     questionsPerCard: 3,
-    questionPrompt: 'You are quizzing a language learner on a flashcard.\n\nGenerate clear, specific questions that test whether the student truly knows this word/phrase. Mix question types:\n- Meaning and translation questions\n- Usage in context (give a scenario, ask them to fill in the word)\n- Synonyms, antonyms, or related words\n- Grammar questions (part of speech, conjugation, gender)\n\nQuestions should be direct and unambiguous. Avoid vague questions like "what is the root of this word" unless the etymology is on the card.',
+    cardsAtOnce: 3,
+    questionPrompt: 'You are quizzing a language learner on a flashcard.\n\nGenerate clear, specific questions that test whether the student truly knows this word/phrase. Mix question types:\n- Meaning and translation questions\n- Usage in context (give a scenario, ask them to fill in the word)\n- Synonyms, antonyms, or related words\n- Grammar questions (part of speech, conjugation, gender)\n\nQuestions should be direct and unambiguous. Avoid vague questions like "what is the root of this word" unless the etymology is on the card.\n\nIMPORTANT: Each question must stand on its own. Do not reference or build upon other questions.',
     ratingRules: 'All correct = Easy, 1 wrong = AI judges Good or Hard based on answer quality, 2 wrong = Hard, All wrong = Again',
   }
   const defaultGeneralStudyRules = {
     questionsPerCard: 3,
-    questionPrompt: 'You are quizzing a student on a flashcard for their studies.\n\nGenerate clear, specific questions that test understanding of this concept. Mix question types:\n- Definition and explanation questions\n- Real-world application or scenario questions\n- Compare/contrast with related concepts\n- Why it matters or when you would use it\n\nQuestions should be direct and answerable in 1-2 sentences. Base questions on what the card actually contains — don\'t ask about information not on the card.',
+    cardsAtOnce: 3,
+    questionPrompt: 'You are quizzing a student on a flashcard for their studies.\n\nGenerate clear, specific questions that test understanding of this concept. Mix question types:\n- Definition and explanation questions\n- Real-world application or scenario questions\n- Compare/contrast with related concepts\n- Why it matters or when you would use it\n\nQuestions should be direct and answerable in 1-2 sentences. Base questions on what the card actually contains — don\'t ask about information not on the card.\n\nIMPORTANT: Each question must stand on its own. Do not reference or build upon other questions.',
     ratingRules: 'All correct = Easy, 1 wrong = AI judges Good or Hard based on answer quality, 2 wrong = Hard, All wrong = Again',
   }
   const defaultMode = {
@@ -161,12 +163,14 @@ export default function App() {
   const [settingsSection, setSettingsSection] = useState(null) // null | 'connection' | 'format' | 'tags'
 
   const [studyActive, setStudyActive] = useState(false)
-  const [studyCards, setStudyCards] = useState([])
-  const [studyIdx, setStudyIdx] = useState(0)
-  const [studyQuestions, setStudyQuestions] = useState([])
-  const [studyAnswers, setStudyAnswers] = useState([])
-  const [studyResults, setStudyResults] = useState([])
-  const [studyPhase, setStudyPhase] = useState('pick') // 'pick' | 'question' | 'feedback' | 'summary'
+  const [studyAllCards, setStudyAllCards] = useState([])     // all cards to study
+  const [studyBatchIdx, setStudyBatchIdx] = useState(0)      // which batch we're on
+  // Per-card tracking: { cardId, front, back, questions: [], answers: [], results: [], done: false }
+  const [studyCardState, setStudyCardState] = useState([])
+  // Queue of { cardIdx, questionIdx } to ask, interleaved
+  const [studyQueue, setStudyQueue] = useState([])
+  const [studyQueueIdx, setStudyQueueIdx] = useState(0)
+  const [studyPhase, setStudyPhase] = useState('pick')       // 'pick' | 'question' | 'batchFeedback' | 'summary'
   const [studyDeck, setStudyDeck] = useState('')
   const [studyInput, setStudyInput] = useState('')
   const [studyLoading, setStudyLoading] = useState(false)
@@ -1041,10 +1045,25 @@ Output ONLY raw JSON. No markdown, no backticks.`
     }
   }
 
-  // ─── Study Session ──────────────────────────────────────────────────────
+  // ─── Study Session (interleaved multi-card) ────────────────────────────
+  const stripHtml = (html) => {
+    const tmp = document.createElement('div')
+    tmp.innerHTML = html
+    return (tmp.textContent || tmp.innerText || '').trim()
+  }
+  const getCardFront = (card) => {
+    const fields = card.fields ? Object.values(card.fields) : []
+    const firstField = [...fields].sort((a, b) => a.order - b.order)[0]
+    return stripHtml(firstField?.value || card.question || '')
+  }
+  const getCardBack = (card) => {
+    const fields = card.fields ? Object.values(card.fields) : []
+    const sorted = [...fields].sort((a, b) => a.order - b.order)
+    return stripHtml(sorted[1]?.value || card.answer || '')
+  }
+
   const startStudySession = async () => {
     if (!ankiConnected) { setAnkiError('Anki is not connected'); return }
-    // Refresh deck list and show picker
     const decks = await ankiGetDecks().catch(() => [])
     setAnkiDecks(decks)
     setStudyDeck(ankiDeck || decks[0] || '')
@@ -1054,26 +1073,19 @@ Output ONLY raw JSON. No markdown, no backticks.`
 
   const beginStudy = async (deck) => {
     setStudyLoading(true)
+    setAnkiError(null)
     try {
-      // Try due cards first, fall back to all cards
       let cardIds = await ankiFindCards(`deck:"${deck}" is:due`)
-      if (!cardIds || cardIds.length === 0) {
-        cardIds = await ankiFindCards(`deck:"${deck}"`)
-      }
-      if (!cardIds || cardIds.length === 0) {
-        setAnkiError('No cards found in this deck')
-        setStudyLoading(false)
-        return
-      }
-      // Shuffle and limit
+      if (!cardIds || cardIds.length === 0) cardIds = await ankiFindCards(`deck:"${deck}"`)
+      if (!cardIds || cardIds.length === 0) { setAnkiError('No cards found in this deck'); setStudyLoading(false); return }
+
       const shuffled = [...cardIds].sort(() => Math.random() - 0.5)
       const cards = await ankiCardsInfo(shuffled.slice(0, 50))
       console.log('[Study] loaded', cards.length, 'cards from deck:', deck)
-      setStudyCards(cards)
-      setStudyIdx(0)
+      setStudyAllCards(cards)
+      setStudyBatchIdx(0)
       setStudyStats({ easy: 0, good: 0, hard: 0, again: 0 })
-      setStudyPhase('question')
-      pickQuestions(cards[0])
+      await startBatch(cards, 0)
     } catch (err) {
       console.error('[Study] failed to start:', err.message)
       setAnkiError('Study failed: ' + err.message)
@@ -1082,137 +1094,130 @@ Output ONLY raw JSON. No markdown, no backticks.`
     }
   }
 
-  const pickQuestions = async (card) => {
+  const startBatch = async (allCards, batchStart) => {
     const rules = activeMode.studyRules || (activeMode.type === 'language' ? defaultStudyRules : defaultGeneralStudyRules)
-    const count = rules.questionsPerCard || 3
-    const front = getCardFront(card)
-    const back = getCardBack(card)
+    const cardsAtOnce = rules.cardsAtOnce || 3
+    const questionsPerCard = rules.questionsPerCard || 3
     const questionPrompt = rules.questionPrompt || defaultStudyRules.questionPrompt
 
-    setStudyAnswers([])
-    setStudyResults([])
-    setStudyInput('')
+    const batchCards = allCards.slice(batchStart, batchStart + cardsAtOnce)
+    if (batchCards.length === 0) { setStudyPhase('summary'); return }
+
     setStudyLoading(true)
 
-    try {
-      const prompt = `Card front: "${front}"
-Card back: "${back}"
-
-Generate exactly ${count} quiz questions for this flashcard.
-
-${questionPrompt}
-
-Return a JSON array of ${count} question strings. Output ONLY raw JSON. No markdown, no backticks.`
-
-      const text = await providerConfig.call(apiKey, 'You generate flashcard quiz questions. Always respond with a valid JSON array of strings.', prompt)
-      const questions = JSON.parse(text.trim().replace(/^```json?\s*/i, '').replace(/```\s*$/, ''))
-      console.log('[Study] AI generated questions:', questions)
-      setStudyQuestions(Array.isArray(questions) ? questions.slice(0, count) : [`What does "${front}" mean?`])
-    } catch (err) {
-      console.error('[Study] question generation failed:', err.message)
-      setStudyQuestions([`What does "${front}" mean?`, `Explain "${front}" in your own words.`, `Why is "${front}" important?`].slice(0, count))
-    } finally {
-      setStudyLoading(false)
-      setStudyPhase('question')
+    // Generate questions for all cards in batch
+    const cardStates = []
+    for (const card of batchCards) {
+      const front = getCardFront(card)
+      const back = getCardBack(card)
+      let questions = []
+      try {
+        const prompt = `Card front: "${front}"\nCard back: "${back}"\n\nGenerate exactly ${questionsPerCard} quiz questions for this flashcard.\n\n${questionPrompt}\n\nReturn a JSON array of ${questionsPerCard} question strings. Output ONLY raw JSON. No markdown, no backticks.`
+        const text = await providerConfig.call(apiKey, 'You generate flashcard quiz questions. Always respond with a valid JSON array of strings.', prompt)
+        questions = JSON.parse(text.trim().replace(/^```json?\s*/i, '').replace(/```\s*$/, ''))
+        if (!Array.isArray(questions)) questions = [`What does "${front}" mean?`]
+      } catch {
+        questions = [`Define "${front}".`, `Explain "${front}" in your own words.`, `Why is "${front}" important?`]
+      }
+      cardStates.push({ cardId: card.cardId, front, back, questions: questions.slice(0, questionsPerCard), answers: [], results: [], done: false })
     }
-  }
 
-  const stripHtml = (html) => {
-    const tmp = document.createElement('div')
-    tmp.innerHTML = html
-    return (tmp.textContent || tmp.innerText || '').trim()
-  }
+    // Build interleaved queue — round-robin questions across cards
+    const queue = []
+    for (let q = 0; q < questionsPerCard; q++) {
+      const indices = [...Array(cardStates.length).keys()].sort(() => Math.random() - 0.5)
+      for (const ci of indices) {
+        if (q < cardStates[ci].questions.length) {
+          queue.push({ cardIdx: ci, questionIdx: q })
+        }
+      }
+    }
 
-  const getCardFront = (card) => {
-    // Use first field value, or fall back to question HTML
-    const fields = card.fields ? Object.values(card.fields) : []
-    const firstField = fields.sort((a, b) => a.order - b.order)[0]
-    return stripHtml(firstField?.value || card.question || '')
-  }
-
-  const getCardBack = (card) => {
-    // Use second field value, or fall back to answer HTML
-    const fields = card.fields ? Object.values(card.fields) : []
-    const sorted = fields.sort((a, b) => a.order - b.order)
-    return stripHtml(sorted[1]?.value || card.answer || '')
+    console.log('[Study] batch started:', cardStates.length, 'cards,', queue.length, 'questions interleaved')
+    setStudyCardState(cardStates)
+    setStudyQueue(queue)
+    setStudyQueueIdx(0)
+    setStudyInput('')
+    setStudyLoading(false)
+    setStudyPhase('question')
   }
 
   const submitStudyAnswer = async () => {
     if (!studyInput.trim() || studyLoading) return
     const answer = studyInput.trim()
-    const qIdx = studyAnswers.length
-    const question = studyQuestions[qIdx]
-    const card = studyCards[studyIdx]
-    const front = getCardFront(card)
-    const back = getCardBack(card)
+    const current = studyQueue[studyQueueIdx]
+    const cs = studyCardState[current.cardIdx]
+    const question = cs.questions[current.questionIdx]
 
     setStudyLoading(true)
     setStudyInput('')
-    const newAnswers = [...studyAnswers, answer]
-    setStudyAnswers(newAnswers)
 
     try {
-      const prompt = `You are evaluating a student's answer to a flashcard question.
-
-Card front: "${front}"
-Card back: "${back}"
-Question: "${question}"
-Student's answer: "${answer}"
-
-Evaluate: is the answer correct, partially correct, or wrong?
-Respond with JSON: {"correct": true/false, "feedback": "brief explanation"}`
-
+      const prompt = `You are evaluating a student's answer to a flashcard question.\n\nCard front: "${cs.front}"\nCard back: "${cs.back}"\nQuestion: "${question}"\nStudent's answer: "${answer}"\n\nEvaluate: is the answer correct, partially correct, or wrong?\nRespond with JSON: {"correct": true/false, "feedback": "brief explanation"}`
       const text = await providerConfig.call(apiKey, 'You evaluate flashcard answers. Always respond with valid JSON only.', prompt)
       const result = JSON.parse(text.trim().replace(/^```json?\s*/i, '').replace(/```\s*$/, ''))
-      const newResults = [...studyResults, result]
-      setStudyResults(newResults)
-      console.log('[Study] Q' + (qIdx + 1) + ':', result.correct ? 'correct' : 'wrong', result.feedback)
 
-      // Check if all questions answered
-      if (newResults.length >= studyQuestions.length) {
-        // Calculate rating
-        const wrongCount = newResults.filter((r) => !r.correct).length
+      // Update card state
+      const newStates = [...studyCardState]
+      newStates[current.cardIdx] = {
+        ...newStates[current.cardIdx],
+        answers: [...newStates[current.cardIdx].answers, answer],
+        results: [...newStates[current.cardIdx].results, result],
+      }
+
+      // Check if this card is done (all questions answered)
+      const rules = activeMode.studyRules || defaultStudyRules
+      const qpc = rules.questionsPerCard || 3
+      if (newStates[current.cardIdx].results.length >= qpc) {
+        newStates[current.cardIdx].done = true
+        // Rate this card
+        const wrongCount = newStates[current.cardIdx].results.filter((r) => !r.correct).length
         let ease, label
         if (wrongCount === 0) { ease = 4; label = 'easy' }
         else if (wrongCount === 1) { ease = 3; label = 'good' }
-        else if (wrongCount >= studyQuestions.length) { ease = 1; label = 'again' }
+        else if (wrongCount >= qpc) { ease = 1; label = 'again' }
         else { ease = 2; label = 'hard' }
-
-        // Submit to Anki
-        try {
-          await ankiAnswerCards([{ cardId: card.cardId, ease }])
-          console.log('[Study] rated card', card.cardId, label, '(ease:', ease, ')')
-        } catch (err) {
-          console.error('[Study] failed to rate card:', err.message)
-        }
+        newStates[current.cardIdx].rating = label
+        try { await ankiAnswerCards([{ cardId: cs.cardId, ease }]) } catch {}
+        ankiSync().catch((err) => console.warn('[Anki] AnkiWeb sync failed:', err.message))
         setStudyStats((prev) => ({ ...prev, [label]: prev[label] + 1 }))
-        setStudyPhase('feedback')
+        console.log('[Study] card done:', cs.front, '→', label)
+      }
+      setStudyCardState(newStates)
+
+      // Advance queue
+      const nextQIdx = studyQueueIdx + 1
+      if (nextQIdx >= studyQueue.length) {
+        setStudyPhase('batchFeedback')
+      } else {
+        setStudyQueueIdx(nextQIdx)
       }
     } catch (err) {
       console.error('[Study] evaluation failed:', err.message)
-      setStudyResults((prev) => [...prev, { correct: false, feedback: 'Evaluation failed: ' + err.message }])
     } finally {
       setStudyLoading(false)
     }
   }
 
-  const nextStudyCard = () => {
-    const nextIdx = studyIdx + 1
-    if (nextIdx >= studyCards.length) {
+  const nextBatch = async () => {
+    const rules = activeMode.studyRules || defaultStudyRules
+    const cardsAtOnce = rules.cardsAtOnce || 3
+    const nextStart = studyBatchIdx + cardsAtOnce
+    if (nextStart >= studyAllCards.length) {
       setStudyPhase('summary')
     } else {
-      setStudyIdx(nextIdx)
-      pickQuestions(studyCards[nextIdx])
+      setStudyBatchIdx(nextStart)
+      setStudyLoading(true)
+      await startBatch(studyAllCards, nextStart)
     }
   }
 
   const exitStudy = () => {
     setStudyActive(false)
-    setStudyCards([])
-    setStudyIdx(0)
-    setStudyQuestions([])
-    setStudyAnswers([])
-    setStudyResults([])
+    setStudyAllCards([])
+    setStudyCardState([])
+    setStudyQueue([])
+    setStudyQueueIdx(0)
     setStudyPhase('pick')
     setStudyInput('')
     setAnkiError(null)
@@ -1294,6 +1299,8 @@ Output ONLY raw JSON. No markdown, no backticks.`
       }
       const noteId = await ankiAddNote(ankiDeck, ankiCard.front, ankiCard.back, ankiCard.tags)
       console.log('[Anki] card synced successfully, noteId:', noteId, 'deck:', ankiDeck)
+      // Sync to AnkiWeb
+      ankiSync().catch((err) => console.warn('[Anki] AnkiWeb sync failed:', err.message))
       setAnkiSynced((prev) => ({ ...prev, [idx]: true }))
     } catch (err) {
       console.error('[Anki] sync error:', err.message)
@@ -1859,10 +1866,20 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
               </button>
               {settingsSection === 'study' && (
                 <div style={{ padding: '6px 10px', borderLeft: '2px solid rgba(255,166,87,.2)', marginLeft: 4, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 2 }}>Questions per card</div>
-                  <input type="number" min="1" max="10" value={activeMode.studyRules?.questionsPerCard || 3}
-                    onChange={(e) => updateActiveMode({ studyRules: { ...(activeMode.studyRules || defaultStudyRules), questionsPerCard: parseInt(e.target.value) || 3 } })}
-                    style={{ ...S.keyInput, fontSize: 11, width: 60 }} />
+                  <div style={{ display: 'flex', gap: 16 }}>
+                    <div>
+                      <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 2 }}>Questions per card</div>
+                      <input type="number" min="1" max="10" value={activeMode.studyRules?.questionsPerCard || 3}
+                        onChange={(e) => updateActiveMode({ studyRules: { ...(activeMode.studyRules || defaultStudyRules), questionsPerCard: parseInt(e.target.value) || 3 } })}
+                        style={{ ...S.keyInput, fontSize: 11, width: 60 }} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 2 }}>Cards at once (interleaved)</div>
+                      <input type="number" min="1" max="10" value={activeMode.studyRules?.cardsAtOnce || 3}
+                        onChange={(e) => updateActiveMode({ studyRules: { ...(activeMode.studyRules || defaultStudyRules), cardsAtOnce: parseInt(e.target.value) || 3 } })}
+                        style={{ ...S.keyInput, fontSize: 11, width: 60 }} />
+                    </div>
+                  </div>
                   <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 2 }}>Question generation prompt (AI uses this to create questions per card)</div>
                   <textarea
                     value={activeMode.studyRules?.questionPrompt || (activeMode.type === 'language' ? defaultStudyRules : defaultGeneralStudyRules).questionPrompt}
@@ -1924,7 +1941,9 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
             {studyPhase === 'summary' && (
               <div style={{ textAlign: 'center' }}>
                 <div style={{ fontSize: 20, fontWeight: 700, color: '#e6edf3', marginBottom: 16 }}>Session Complete</div>
-                <div style={{ fontSize: 14, color: '#7d8590', marginBottom: 24 }}>{studyCards.length} cards studied</div>
+                <div style={{ fontSize: 14, color: '#7d8590', marginBottom: 24 }}>
+                  {studyStats.easy + studyStats.good + studyStats.hard + studyStats.again} cards studied
+                </div>
                 <div style={{ display: 'flex', justifyContent: 'center', gap: 16, marginBottom: 24 }}>
                   {[
                     { label: 'Easy', count: studyStats.easy, color: '#7ee787' },
@@ -1942,104 +1961,128 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
               </div>
             )}
 
-            {/* Question / Feedback phase */}
-            {studyPhase !== 'summary' && (() => {
-              const card = studyCards[studyIdx]
-              const front = stripHtml(card?.fields?.Front?.value || '')
-              const back = stripHtml(card?.fields?.Back?.value || '')
-              const qIdx = studyAnswers.length
+            {/* Interleaved question phase */}
+            {studyPhase === 'question' && studyQueue.length > 0 && (() => {
+              const current = studyQueue[studyQueueIdx]
+              const cs = studyCardState[current.cardIdx]
+              const question = cs.questions[current.questionIdx]
+              const totalQ = studyQueue.length
+              const ratingColors = { easy: '#7ee787', good: '#58a6ff', hard: '#d29922', again: '#f85149' }
               return (
                 <div>
-                  {/* Header */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                    <span style={{ fontSize: 12, color: '#7d8590' }}>Card {studyIdx + 1}/{studyCards.length}</span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                    <span style={{ fontSize: 12, color: '#7d8590' }}>
+                      Question {studyQueueIdx + 1}/{totalQ} — {studyCardState.length} cards in batch
+                    </span>
                     <button onClick={exitStudy} style={{ ...S.ghostBtn, fontSize: 10 }}>Exit Study</button>
                   </div>
 
-                  {/* Card front */}
-                  <div style={{
-                    background: '#1c2129', border: '1px solid #2a3040', borderRadius: 8,
-                    padding: '20px 24px', marginBottom: 16, textAlign: 'center',
-                  }}>
-                    <div style={{ fontSize: 18, fontWeight: 700, color: '#e6edf3' }}>{front}</div>
+                  {/* Card indicator chips */}
+                  <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+                    {studyCardState.map((c, i) => (
+                      <span key={i} style={{
+                        fontSize: 10, padding: '3px 8px', borderRadius: 4,
+                        background: i === current.cardIdx ? 'rgba(88,166,255,.2)' : c.done ? `${ratingColors[c.rating]}22` : 'rgba(125,133,144,.1)',
+                        color: i === current.cardIdx ? '#58a6ff' : c.done ? ratingColors[c.rating] : '#7d8590',
+                        border: `1px solid ${i === current.cardIdx ? 'rgba(88,166,255,.4)' : c.done ? `${ratingColors[c.rating]}44` : '#2a3040'}`,
+                        fontWeight: i === current.cardIdx ? 700 : 400,
+                      }}>
+                        {c.front.slice(0, 20)}{c.front.length > 20 ? '...' : ''} {c.done ? `(${c.rating})` : `${c.results.length}/${c.questions.length}`}
+                      </span>
+                    ))}
                   </div>
 
-                  {/* Previous Q&A results */}
-                  {studyResults.map((r, i) => (
-                    <div key={i} style={{
-                      display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 8,
-                      padding: '8px 12px', borderRadius: 6,
-                      background: r.correct ? 'rgba(126,231,135,.06)' : 'rgba(248,81,73,.06)',
-                      border: `1px solid ${r.correct ? 'rgba(126,231,135,.15)' : 'rgba(248,81,73,.15)'}`,
-                    }}>
-                      <span style={{ color: r.correct ? '#7ee787' : '#f85149', fontWeight: 700, flexShrink: 0 }}>{r.correct ? '\u2713' : '\u2717'}</span>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 11, color: '#7d8590', marginBottom: 2 }}>Q{i + 1}: {studyQuestions[i]}</div>
-                        <div style={{ fontSize: 12, color: '#c9d1d9' }}>Your answer: {studyAnswers[i]}</div>
-                        <div style={{ fontSize: 11, color: r.correct ? '#7ee787' : '#ffa657', marginTop: 2 }}>{r.feedback}</div>
-                      </div>
-                    </div>
-                  ))}
+                  {/* Current card front */}
+                  <div style={{
+                    background: '#1c2129', border: '1px solid #2a3040', borderRadius: 8,
+                    padding: '16px 20px', marginBottom: 12, textAlign: 'center',
+                  }}>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: '#e6edf3' }}>{cs.front}</div>
+                  </div>
 
-                  {/* Current question input */}
-                  {studyPhase === 'question' && qIdx < studyQuestions.length && (
-                    <div style={{ marginTop: 12 }}>
-                      <div style={{ fontSize: 13, color: '#e6edf3', fontWeight: 600, marginBottom: 8 }}>
-                        Q{qIdx + 1}/{studyQuestions.length}: {studyQuestions[qIdx]}
-                      </div>
-                      <div style={{ display: 'flex', gap: 8 }}>
-                        <input
-                          value={studyInput}
-                          onChange={(e) => setStudyInput(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === 'Enter') submitStudyAnswer() }}
-                          placeholder="Type your answer..."
-                          style={{ ...S.keyInput, flex: 1, fontSize: 13, padding: '10px 14px' }}
-                          disabled={studyLoading}
-                          autoFocus
-                        />
-                        <button
-                          onClick={submitStudyAnswer}
-                          disabled={studyLoading || !studyInput.trim()}
-                          style={{ ...S.captureBtn, borderRadius: 6, opacity: studyLoading || !studyInput.trim() ? 0.5 : 1 }}
-                        >
-                          {studyLoading ? '...' : 'Submit'}
-                        </button>
-                      </div>
-                    </div>
-                  )}
+                  {/* Question */}
+                  <div style={{ fontSize: 13, color: '#e6edf3', fontWeight: 600, marginBottom: 8 }}>
+                    {question}
+                  </div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <input
+                      value={studyInput}
+                      onChange={(e) => setStudyInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') submitStudyAnswer() }}
+                      placeholder="Type your answer..."
+                      style={{ ...S.keyInput, flex: 1, fontSize: 13, padding: '10px 14px' }}
+                      disabled={studyLoading}
+                      autoFocus
+                    />
+                    <button
+                      onClick={submitStudyAnswer}
+                      disabled={studyLoading || !studyInput.trim()}
+                      style={{ ...S.captureBtn, borderRadius: 6, opacity: studyLoading || !studyInput.trim() ? 0.5 : 1 }}
+                    >
+                      {studyLoading ? '...' : 'Submit'}
+                    </button>
+                  </div>
 
-                  {/* Feedback phase — show rating and next button */}
-                  {studyPhase === 'feedback' && (
-                    <div style={{ marginTop: 16, textAlign: 'center' }}>
-                      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: (() => {
-                        const wrong = studyResults.filter((r) => !r.correct).length
-                        if (wrong === 0) return '#7ee787'
-                        if (wrong === 1) return '#58a6ff'
-                        if (wrong >= studyQuestions.length) return '#f85149'
-                        return '#d29922'
-                      })() }}>
-                        {(() => {
-                          const wrong = studyResults.filter((r) => !r.correct).length
-                          const correct = studyResults.length - wrong
-                          if (wrong === 0) return `Easy (${correct}/${studyResults.length} correct)`
-                          if (wrong === 1) return `Good (${correct}/${studyResults.length} correct)`
-                          if (wrong >= studyQuestions.length) return `Again (${correct}/${studyResults.length} correct)`
-                          return `Hard (${correct}/${studyResults.length} correct)`
-                        })()}
+                  {/* Last answer feedback (brief) */}
+                  {studyQueueIdx > 0 && (() => {
+                    const prev = studyQueue[studyQueueIdx - 1]
+                    const prevCs = studyCardState[prev.cardIdx]
+                    const prevResult = prevCs.results[prevCs.results.length - 1]
+                    if (!prevResult) return null
+                    return (
+                      <div style={{
+                        marginTop: 8, padding: '6px 10px', borderRadius: 5, fontSize: 11,
+                        background: prevResult.correct ? 'rgba(126,231,135,.06)' : 'rgba(248,81,73,.06)',
+                        border: `1px solid ${prevResult.correct ? 'rgba(126,231,135,.15)' : 'rgba(248,81,73,.15)'}`,
+                        color: prevResult.correct ? '#7ee787' : '#ffa657',
+                      }}>
+                        {prevResult.correct ? '\u2713' : '\u2717'} {prevCs.front}: {prevResult.feedback}
                       </div>
-                      {studyPhase === 'feedback' && (
-                        <div style={{ fontSize: 11, color: '#484f58', marginBottom: 12 }}>
-                          Answer: {back}
-                        </div>
-                      )}
-                      <button onClick={nextStudyCard} style={{ ...S.captureBtn, borderRadius: 6 }}>
-                        {studyIdx + 1 >= studyCards.length ? 'Finish' : 'Next Card \u2192'}
-                      </button>
-                    </div>
-                  )}
+                    )
+                  })()}
                 </div>
               )
             })()}
+
+            {/* Batch feedback — show all card results */}
+            {studyPhase === 'batchFeedback' && (
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: '#e6edf3', marginBottom: 16 }}>Batch Results</div>
+                {studyCardState.map((cs, ci) => {
+                  const ratingColors = { easy: '#7ee787', good: '#58a6ff', hard: '#d29922', again: '#f85149' }
+                  return (
+                    <div key={ci} style={{ marginBottom: 16, border: '1px solid #2a3040', borderRadius: 8, overflow: 'hidden' }}>
+                      <div style={{
+                        padding: '8px 12px', background: '#1c2129',
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: '#e6edf3' }}>{cs.front}</span>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: ratingColors[cs.rating] || '#7d8590' }}>
+                          {cs.rating?.toUpperCase()}
+                        </span>
+                      </div>
+                      {cs.questions.map((q, qi) => (
+                        <div key={qi} style={{ padding: '6px 12px', borderTop: '1px solid #2a3040', fontSize: 11 }}>
+                          <div style={{ color: '#7d8590' }}>{q}</div>
+                          <div style={{ color: '#c9d1d9' }}>Your answer: {cs.answers[qi]}</div>
+                          <div style={{ color: cs.results[qi]?.correct ? '#7ee787' : '#ffa657' }}>
+                            {cs.results[qi]?.correct ? '\u2713' : '\u2717'} {cs.results[qi]?.feedback}
+                          </div>
+                        </div>
+                      ))}
+                      <div style={{ padding: '4px 12px', borderTop: '1px solid #2a3040', fontSize: 10, color: '#484f58' }}>
+                        {cs.back}
+                      </div>
+                    </div>
+                  )
+                })}
+                <div style={{ textAlign: 'center', marginTop: 8 }}>
+                  <button onClick={nextBatch} style={{ ...S.captureBtn, borderRadius: 6 }}>
+                    {studyBatchIdx + (activeMode.studyRules?.cardsAtOnce || 3) >= studyAllCards.length ? 'Finish Session' : 'Next Batch \u2192'}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </main>
       )}
