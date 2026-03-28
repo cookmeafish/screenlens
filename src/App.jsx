@@ -1732,18 +1732,18 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
 
           {ankiConnected && (
             <>
-              <button onClick={startStudySession} disabled={studyLoading} style={{
+              <button onClick={() => { if (studyActive) { exitStudy() } else { closeDeckBrowser(); startStudySession() } }} disabled={studyLoading} style={{
                 ...S.ghostBtn,
-                color: '#ffa657',
-                borderColor: 'rgba(255,166,87,0.25)',
+                color: studyActive ? '#e6edf3' : '#ffa657',
+                borderColor: studyActive ? 'rgba(230,237,243,0.3)' : 'rgba(255,166,87,0.25)',
                 opacity: studyLoading ? 0.5 : 1,
               }}>
                 {studyLoading ? 'Loading...' : 'Study'}
               </button>
-              <button onClick={openDeckBrowser} style={{
+              <button onClick={() => { if (deckBrowserActive) { closeDeckBrowser() } else { exitStudy(); openDeckBrowser() } }} style={{
                 ...S.ghostBtn,
-                color: '#d2a8ff',
-                borderColor: 'rgba(210,168,255,0.25)',
+                color: deckBrowserActive ? '#e6edf3' : '#d2a8ff',
+                borderColor: deckBrowserActive ? 'rgba(230,237,243,0.3)' : 'rgba(210,168,255,0.25)',
               }}>
                 Deck
               </button>
