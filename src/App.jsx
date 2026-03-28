@@ -2144,32 +2144,31 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
         <main style={{ ...S.main, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
           <div style={{ maxWidth: 600, width: '100%', padding: '40px 20px' }}>
 
-            {/* Deck picker phase */}
+            {/* Study start phase */}
             {studyPhase === 'pick' && (
               <div style={{ textAlign: 'center' }}>
                 <div style={{ fontSize: 20, fontWeight: 700, color: '#e6edf3', marginBottom: 8 }}>Study Session</div>
-                <div style={{ fontSize: 12, color: '#7d8590', marginBottom: 20 }}>Select a deck to study from</div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center', marginBottom: 20 }}>
-                  {ankiDecks.map((d) => (
-                    <button key={d}
-                      onClick={() => setStudyDeck(d)}
-                      style={{
-                        width: 300, padding: '10px 16px', borderRadius: 6, fontSize: 13,
-                        fontFamily: 'inherit', cursor: 'pointer', textAlign: 'left',
-                        background: studyDeck === d ? 'rgba(88,166,255,.15)' : 'rgba(125,133,144,.06)',
-                        color: studyDeck === d ? '#58a6ff' : '#c9d1d9',
-                        border: studyDeck === d ? '1px solid rgba(88,166,255,.4)' : '1px solid #2a3040',
-                        fontWeight: studyDeck === d ? 700 : 400,
-                      }}
-                    >
-                      {d}
-                    </button>
-                  ))}
+                <div style={{ fontSize: 12, color: '#7d8590', marginBottom: 20 }}>
+                  Mode: <strong style={{ color: '#58a6ff' }}>{activeMode.name}</strong>
                 </div>
-                <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+
+                {/* Current deck display */}
+                <div style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 10, padding: '12px 20px',
+                  background: '#1c2129', border: '1px solid #2a3040', borderRadius: 8, marginBottom: 16,
+                }}>
+                  <span style={{ fontSize: 12, color: '#7d8590' }}>Deck:</span>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: '#58a6ff' }}>{studyDeck || 'None selected'}</span>
+                  <select value={studyDeck} onChange={(e) => { setStudyDeck(e.target.value); setAnkiDeck(e.target.value) }}
+                    style={{ ...S.select, fontSize: 11, padding: '4px 8px' }}>
+                    {ankiDecks.map((d) => <option key={d} value={d}>{d}</option>)}
+                  </select>
+                </div>
+
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 8 }}>
                   <button onClick={() => beginStudy(studyDeck)} disabled={!studyDeck || studyLoading}
-                    style={{ ...S.captureBtn, borderRadius: 6, opacity: !studyDeck || studyLoading ? 0.5 : 1 }}>
-                    {studyLoading ? 'Loading cards...' : 'Start Studying'}
+                    style={{ ...S.captureBtn, borderRadius: 6, padding: '10px 24px', fontSize: 13, opacity: !studyDeck || studyLoading ? 0.5 : 1 }}>
+                    {studyLoading ? 'Loading cards...' : 'Study Now'}
                   </button>
                   <button onClick={exitStudy} style={{ ...S.ghostBtn }}>Cancel</button>
                 </div>
