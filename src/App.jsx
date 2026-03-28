@@ -777,7 +777,12 @@ export default function App() {
   }, [loadImageFromFile])
 
   // ─── Drag & Drop ───────────────────────────────────────────────────────────
-  const handleDragOver = (e) => { e.preventDefault(); setDragging(true) }
+  const handleDragOver = (e) => {
+    e.preventDefault()
+    // Don't show image drop overlay if dragging text files while knowledge section is open
+    if (showKnowledgeSection) return
+    setDragging(true)
+  }
   const handleDragLeave = (e) => {
     if (containerRef.current && !containerRef.current.contains(e.relatedTarget)) setDragging(false)
   }
@@ -1757,7 +1762,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
       />
 
       {/* ── Drag Overlay ─────────────────────────────────────────────────────── */}
-      {dragging && (
+      {dragging && !showKnowledgeSection && (
         <div style={S.dragOverlay}>
           <div style={S.dragBox}>
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none">
