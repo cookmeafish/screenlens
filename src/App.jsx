@@ -2203,9 +2203,8 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                   background: '#1c2129', border: '1px solid #2a3040', borderRadius: 8, marginBottom: 16,
                 }}>
                   <span style={{ fontSize: 12, color: '#7d8590' }}>Deck:</span>
-                  <span style={{ fontSize: 14, fontWeight: 700, color: '#58a6ff' }}>{studyDeck || 'None selected'}</span>
                   <select value={studyDeck} onChange={(e) => { setStudyDeck(e.target.value); setAnkiDeck(e.target.value) }}
-                    style={{ ...S.select, fontSize: 11, padding: '4px 8px' }}>
+                    style={{ ...S.select, fontSize: 12, padding: '6px 10px' }}>
                     {ankiDecks.map((d) => <option key={d} value={d}>{d}</option>)}
                   </select>
                 </div>
