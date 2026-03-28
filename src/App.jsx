@@ -163,7 +163,8 @@ export default function App() {
   const [modeCreating, setModeCreating] = useState(false)
   const [modeEditInput, setModeEditInput] = useState('')
   const [showSettings, setShowSettings] = useState(false)
-  const [settingsSection, setSettingsSection] = useState(null) // null | 'connection' | 'format' | 'tags'
+  const [settingsTopSection, setSettingsTopSection] = useState(null) // null | 'anki' | 'knowledge'
+  const [settingsSection, setSettingsSection] = useState(null) // null | 'format' | 'tags' | 'study' (sub-sections within Anki)
 
   const [studyActive, setStudyActive] = useState(false)
   const [studyAllCards, setStudyAllCards] = useState([])     // all cards to study
@@ -1779,7 +1780,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
             </button>
             <button onClick={() => {
               setShowSettings(!showSettings)
-              if (showSettings) setSettingsSection(null)
+              if (showSettings) { setSettingsSection(null); setSettingsTopSection(null) }
             }} style={{
               ...S.ghostBtn, borderRadius: '0 6px 6px 0',
               color: showSettings ? '#e6edf3' : '#7d8590',
@@ -1928,7 +1929,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
               + Default Mode
             </button>
             <div style={{ flex: 1 }} />
-            <button onClick={() => { setShowModePanel(false); setShowSettings(false); setSettingsSection(null) }} style={S.keyDone}>Done</button>
+            <button onClick={() => { setShowModePanel(false); setShowSettings(false); setSettingsSection(null); setSettingsTopSection(null) }} style={S.keyDone}>Done</button>
           </div>
         </div>
       )}
@@ -1956,18 +1957,18 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
           </div>
           {/* Anki — top-level collapsible */}
           <button
-            onClick={() => setSettingsSection(settingsSection ? null : 'anki')}
+            onClick={() => { setSettingsTopSection(settingsTopSection === 'anki' ? null : 'anki'); setSettingsSection(null) }}
             style={{
               width: '100%', textAlign: 'left', padding: '8px 12px', borderRadius: 6,
               fontSize: 12, fontFamily: 'inherit', cursor: 'pointer', fontWeight: 700,
-              background: settingsSection ? 'rgba(88,166,255,.15)' : 'rgba(88,166,255,.06)',
+              background: settingsTopSection === 'anki' ? 'rgba(88,166,255,.15)' : 'rgba(88,166,255,.06)',
               color: '#58a6ff', border: '1px solid rgba(88,166,255,.25)',
             }}
           >
-            {settingsSection ? '\u25BC' : '\u25B6'} Anki Settings {ankiConnected ? '' : ankiConnected === false ? '(offline)' : ''}
+            {settingsTopSection === 'anki' ? '\u25BC' : '\u25B6'} Anki Settings {ankiConnected ? '' : ankiConnected === false ? '(offline)' : ''}
           </button>
 
-          {settingsSection && (
+          {settingsTopSection === 'anki' && (
             <div style={{ paddingLeft: 8, borderLeft: '2px solid rgba(88,166,255,.2)', display: 'flex', flexDirection: 'column', gap: 8 }}>
 
               {/* Connection & Deck */}
@@ -2101,17 +2102,17 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
 
           {/* Knowledge Base — top-level collapsible */}
           <button
-            onClick={() => setSettingsSection(settingsSection === 'knowledge' ? null : 'knowledge')}
+            onClick={() => { setSettingsTopSection(settingsTopSection === 'knowledge' ? null : 'knowledge'); setSettingsSection(null) }}
             style={{
               width: '100%', textAlign: 'left', padding: '8px 12px', borderRadius: 6,
               fontSize: 12, fontFamily: 'inherit', cursor: 'pointer', fontWeight: 700,
-              background: settingsSection === 'knowledge' ? 'rgba(126,231,135,.15)' : 'rgba(126,231,135,.06)',
+              background: settingsTopSection === 'knowledge' ? 'rgba(126,231,135,.15)' : 'rgba(126,231,135,.06)',
               color: '#7ee787', border: '1px solid rgba(126,231,135,.25)',
             }}
           >
-            {settingsSection === 'knowledge' ? '\u25BC' : '\u25B6'} Knowledge Base
+            {settingsTopSection === 'knowledge' ? '\u25BC' : '\u25B6'} Knowledge Base
           </button>
-          {settingsSection === 'knowledge' && (
+          {settingsTopSection === 'knowledge' && (
             <div style={{ paddingLeft: 8, borderLeft: '2px solid rgba(126,231,135,.2)', display: 'flex', flexDirection: 'column', gap: 8 }}>
               <div style={{ fontSize: 11, color: '#c9d1d9' }}>
                 Drop <code>.txt</code> or <code>.md</code> files into the knowledge folder to give the AI extra context when generating study questions and evaluating answers.
