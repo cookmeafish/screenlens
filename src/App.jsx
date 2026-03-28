@@ -2098,6 +2098,41 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
               <div style={{ fontSize: 10, color: '#484f58' }}>Requires AnkiConnect addon (code: 2055492159)</div>
             </div>
           )}
+
+          {/* Knowledge Base — top-level collapsible */}
+          <button
+            onClick={() => setSettingsSection(settingsSection === 'knowledge' ? null : 'knowledge')}
+            style={{
+              width: '100%', textAlign: 'left', padding: '8px 12px', borderRadius: 6,
+              fontSize: 12, fontFamily: 'inherit', cursor: 'pointer', fontWeight: 700,
+              background: settingsSection === 'knowledge' ? 'rgba(126,231,135,.15)' : 'rgba(126,231,135,.06)',
+              color: '#7ee787', border: '1px solid rgba(126,231,135,.25)',
+            }}
+          >
+            {settingsSection === 'knowledge' ? '\u25BC' : '\u25B6'} Knowledge Base
+          </button>
+          {settingsSection === 'knowledge' && (
+            <div style={{ paddingLeft: 8, borderLeft: '2px solid rgba(126,231,135,.2)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ fontSize: 11, color: '#c9d1d9' }}>
+                Drop <code>.txt</code> or <code>.md</code> files into the knowledge folder to give the AI extra context when generating study questions and evaluating answers.
+              </div>
+              <div style={{
+                padding: '10px 14px', background: '#1c2129', border: '1px solid #2a3040', borderRadius: 6,
+                fontSize: 11, fontFamily: 'monospace', color: '#58a6ff',
+              }}>
+                modes/{activeMode.name}/knowledge/
+              </div>
+              <div style={{ fontSize: 10, color: '#7d8590' }}>
+                Files are loaded automatically when starting a study session. This is completely optional — study works without any files.
+              </div>
+              <button onClick={() => {
+                const dir = `modes/${activeMode.name}/knowledge`
+                fetch('/api/ensure-dir', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir }) }).catch(() => {})
+              }} style={{ ...S.getKeyLink, fontSize: 10, alignSelf: 'flex-start' }}>
+                Create Folder
+              </button>
+            </div>
+          )}
         </div>
       )}
 

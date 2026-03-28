@@ -307,6 +307,26 @@ function apiPlugin() {
         }
       })
 
+      // Ensure directory endpoint
+      server.middlewares.use('/api/ensure-dir', (req, res) => {
+        if (req.method === 'POST') {
+          const handleBody = (bodyStr) => {
+            try {
+              const { dir } = JSON.parse(bodyStr)
+              const full = path.resolve(dir)
+              if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true })
+              res.setHeader('Content-Type', 'application/json')
+              res.end(JSON.stringify({ ok: true, path: full }))
+            } catch (e) {
+              res.statusCode = 400
+              res.end(JSON.stringify({ error: e.message }))
+            }
+          }
+          if (req.body) { handleBody(typeof req.body === 'string' ? req.body : JSON.stringify(req.body)) }
+          else { let b = ''; req.on('data', c => b += c); req.on('end', () => handleBody(b)) }
+        } else { res.statusCode = 405; res.end('') }
+      })
+
       // Config endpoint
       server.middlewares.use('/api/config', (req, res) => {
         if (req.method === 'GET') {
