@@ -790,8 +790,16 @@ export default function App() {
     e.preventDefault(); setDragging(false)
     const file = e.dataTransfer?.files?.[0]
     if (!file) return
+    console.log('[App] drop event, file:', file.name, 'knowledgeOpen:', showKnowledgeSection)
     // Don't handle text files at app level — they're for knowledge base
-    if (file.name.match(/\.(txt|md)$/i)) return
+    if (file.name.match(/\.(txt|md)$/i)) {
+      // If knowledge section is open, forward the file there
+      if (showKnowledgeSection) {
+        console.log('[App] forwarding text file to knowledge upload')
+        uploadKnowledgeFile(file)
+      }
+      return
+    }
     loadImageFromFile(file)
   }
 
@@ -1149,12 +1157,20 @@ Output ONLY raw JSON. No markdown, no backticks.`
   }
 
   const uploadKnowledgeFile = async (file) => {
-    const text = await file.text()
-    await fetch(`/api/modes/knowledge?mode=${encodeURIComponent(activeMode.name)}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filename: file.name, content: text }),
-    })
-    loadKnowledgeFiles()
+    console.log('[Knowledge] uploading file:', file.name, 'size:', file.size, 'type:', file.type)
+    try {
+      const text = await file.text()
+      console.log('[Knowledge] file content length:', text.length)
+      const res = await fetch(`/api/modes/knowledge?mode=${encodeURIComponent(activeMode.name)}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: file.name, content: text }),
+      })
+      const data = await res.json()
+      console.log('[Knowledge] upload result:', data)
+      await loadKnowledgeFiles()
+    } catch (err) {
+      console.error('[Knowledge] upload failed:', err.message)
+    }
   }
 
   const deleteKnowledgeFile = async (fileName) => {
@@ -1172,8 +1188,14 @@ Output ONLY raw JSON. No markdown, no backticks.`
     e.stopPropagation()
     setKnowledgeDragging(false)
     setDragging(false)
-    const files = Array.from(e.dataTransfer.files).filter(f => f.name.match(/\.(txt|md)$/i))
-    files.forEach(uploadKnowledgeFile)
+    const allFiles = Array.from(e.dataTransfer.files)
+    console.log('[Knowledge] drop event, files:', allFiles.map(f => f.name))
+    const textFiles = allFiles.filter(f => f.name.match(/\.(txt|md)$/i))
+    if (textFiles.length === 0) {
+      console.log('[Knowledge] no .txt/.md files in drop')
+      return
+    }
+    textFiles.forEach(uploadKnowledgeFile)
   }
 
   const handleKnowledgeFileInput = (e) => {
