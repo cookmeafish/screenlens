@@ -1542,10 +1542,20 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                   <div style={S.ttAnkiCardContent}>{ankiCard.front}</div>
                   <div style={S.ttAnkiCardLabel}>Back</div>
                   <div style={{ ...S.ttAnkiCardContent, whiteSpace: 'pre-line', marginBottom: 4 }}>{ankiCard.back}</div>
-                  <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 6 }}>
-                    Deck: <strong style={{ color: '#58a6ff' }}>{ankiDeck}</strong>
-                    {ankiConnected === false && <span style={{ color: '#d29922', marginLeft: 6 }}>(offline)</span>}
-                    <span style={{ marginLeft: 6, cursor: 'pointer', color: '#58a6ff', textDecoration: 'underline' }} onClick={() => setShowAnkiSettings(true)}>change</span>
+                  <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span>Deck:</span>
+                    {ankiDecks.length > 0 ? (
+                      <select
+                        value={ankiDeck}
+                        onChange={(e) => setAnkiDeck(e.target.value)}
+                        style={{ background: '#161b22', color: '#58a6ff', border: '1px solid rgba(88,166,255,.3)', borderRadius: 4, padding: '2px 4px', fontSize: 10, fontFamily: 'inherit' }}
+                      >
+                        {ankiDecks.map((d) => <option key={d} value={d}>{d}</option>)}
+                      </select>
+                    ) : (
+                      <strong style={{ color: '#58a6ff' }}>{ankiDeck}</strong>
+                    )}
+                    {ankiConnected === false && <span style={{ color: '#d29922' }}>(offline)</span>}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <button

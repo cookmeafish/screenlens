@@ -105,27 +105,37 @@ function apiPlugin() {
       // AnkiConnect proxy endpoint
       server.middlewares.use('/api/anki', (req, res) => {
         if (req.method === 'POST') {
-          let body = ''
-          req.on('data', (chunk) => { body += chunk })
-          req.on('end', () => {
+          // Vite may have already parsed the body — check req.body first
+          const forwardBody = (bodyStr) => {
+            console.log('[Anki proxy] forwarding:', bodyStr.substring(0, 200))
             const ankiReq = http.request(
-              { hostname: '127.0.0.1', port: 8765, method: 'POST', headers: { 'Content-Type': 'application/json' } },
+              { hostname: '127.0.0.1', port: 8765, method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(bodyStr) } },
               (ankiRes) => {
                 let data = ''
                 ankiRes.on('data', (chunk) => { data += chunk })
                 ankiRes.on('end', () => {
+                  console.log('[Anki proxy] response:', data.substring(0, 200))
                   res.setHeader('Content-Type', 'application/json')
                   res.end(data)
                 })
               }
             )
-            ankiReq.on('error', () => {
+            ankiReq.on('error', (err) => {
+              console.log('[Anki proxy] error:', err.message)
               res.setHeader('Content-Type', 'application/json')
               res.end(JSON.stringify({ error: 'Anki is not running or AnkiConnect is not installed' }))
             })
-            ankiReq.write(body)
+            ankiReq.write(bodyStr)
             ankiReq.end()
-          })
+          }
+          // Handle both pre-parsed body and raw stream
+          if (req.body) {
+            forwardBody(typeof req.body === 'string' ? req.body : JSON.stringify(req.body))
+          } else {
+            let raw = ''
+            req.on('data', (chunk) => { raw += chunk })
+            req.on('end', () => forwardBody(raw))
+          }
         } else {
           res.statusCode = 405
           res.end('')
