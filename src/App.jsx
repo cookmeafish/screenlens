@@ -1007,11 +1007,11 @@ Output ONLY raw JSON. No markdown, no backticks.`
     setModeCreating(true)
     try {
       const prompt = `Current study mode config:
-${JSON.stringify({ name: activeMode.name, type: activeMode.type, fields: activeMode.fields, frontTemplate: activeMode.frontTemplate, backTemplate: activeMode.backTemplate, tagRules: activeMode.tagRules }, null, 2)}
+${JSON.stringify({ name: activeMode.name, type: activeMode.type, fields: activeMode.fields, frontTemplate: activeMode.frontTemplate, backTemplate: activeMode.backTemplate, tagRules: activeMode.tagRules, questionPrompt: activeMode.studyRules?.questionPrompt || '' }, null, 2)}
 
 User's request: "${instruction}"
 
-Modify the config according to the user's request. Return the FULL updated JSON config with all fields (name, type, fields, frontTemplate, backTemplate, tagRules). Keep everything the user didn't ask to change.
+Modify the config according to the user's request. Return the FULL updated JSON config with all fields (name, type, fields, frontTemplate, backTemplate, tagRules, questionPrompt). Keep everything the user didn't ask to change.
 
 Output ONLY raw JSON. No markdown, no backticks.`
 
@@ -1020,14 +1020,18 @@ Output ONLY raw JSON. No markdown, no backticks.`
         prompt
       )
       const config = JSON.parse(text.trim().replace(/^```json?\s*/i, '').replace(/```\s*$/, ''))
-      updateActiveMode({
+      const updates = {
         name: config.name || activeMode.name,
         type: config.type || activeMode.type,
         fields: config.fields || activeMode.fields,
         frontTemplate: config.frontTemplate || activeMode.frontTemplate,
         backTemplate: config.backTemplate || activeMode.backTemplate,
         tagRules: config.tagRules || activeMode.tagRules,
-      })
+      }
+      if (config.questionPrompt) {
+        updates.studyRules = { ...(activeMode.studyRules || defaultStudyRules), questionPrompt: config.questionPrompt }
+      }
+      updateActiveMode(updates)
       console.log('[Mode] updated via AI:', config)
     } catch (err) {
       console.error('[Mode] AI edit failed:', err.message)
@@ -1228,6 +1232,7 @@ Generate a JSON config for this study mode:
 - "frontTemplate": card front using {fieldName} placeholders. For language: "{word} ({partOfSpeech})". For general: "{term}" or similar.
 - "backTemplate": card back using {fieldName} placeholders and \\n for newlines. Use descriptive labels before each placeholder.
 - "tagRules": instructions for AI tag generation. Include "screenlens" always. Add subject-specific categories. Tags should be lowercase, no spaces (use hyphens).
+- "questionPrompt": instructions for AI when generating study/quiz questions for flashcards in this mode. Describe what kinds of questions to ask (e.g. definitions, real-world scenarios, comparisons). Be specific to the subject matter.
 
 Output ONLY raw JSON. No markdown, no backticks.`
 
@@ -1247,7 +1252,11 @@ Output ONLY raw JSON. No markdown, no backticks.`
         frontTemplate: config.frontTemplate || '{term}',
         backTemplate: config.backTemplate || 'Definition: {definition}',
         tagRules: config.tagRules || 'Include: screenlens',
-        studyRules: (config.type || 'general') === 'language' ? defaultStudyRules : defaultGeneralStudyRules,
+        studyRules: {
+          questionsPerCard: 3,
+          questionPrompt: config.questionPrompt || ((config.type || 'general') === 'language' ? defaultStudyRules : defaultGeneralStudyRules).questionPrompt,
+          ratingRules: defaultStudyRules.ratingRules,
+        },
       }
       saveModes([...modes, newMode], newId)
       console.log('[Mode] created:', newMode)
