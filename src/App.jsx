@@ -1564,14 +1564,30 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={() => { setShowModePanel(false); setShowSettings(false); setSettingsSection(null) }} style={S.keyDone}>Done</button>
           </div>
+        </div>
+      )}
 
-          {/* Settings — shown when gear is clicked */}
-          {showSettings && (
-            <div style={{ borderTop: '1px solid #2a3040', paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: '#58a6ff' }}>Anki</div>
+      {/* Settings panel — independent of mode panel */}
+      {showSettings && (
+        <div style={{ ...S.keyBar, flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
+          {/* Anki — top-level collapsible */}
+          <button
+            onClick={() => setSettingsSection(settingsSection ? null : 'anki')}
+            style={{
+              width: '100%', textAlign: 'left', padding: '8px 12px', borderRadius: 6,
+              fontSize: 12, fontFamily: 'inherit', cursor: 'pointer', fontWeight: 700,
+              background: settingsSection ? 'rgba(88,166,255,.15)' : 'rgba(88,166,255,.06)',
+              color: '#58a6ff', border: '1px solid rgba(88,166,255,.25)',
+            }}
+          >
+            {settingsSection ? '\u25BC' : '\u25B6'} Anki {ankiConnected ? '' : ankiConnected === false ? '(offline)' : ''}
+          </button>
 
-              {/* Connection & Deck — always visible when settings open */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {settingsSection && (
+            <div style={{ paddingLeft: 8, borderLeft: '2px solid rgba(88,166,255,.2)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+
+              {/* Connection & Deck */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '4px 0' }}>
                 <span style={{ width: 8, height: 8, borderRadius: '50%', background: ankiConnected ? '#7ee787' : ankiConnected === false ? '#d29922' : '#7d8590', flexShrink: 0 }} />
                 <span style={{ fontSize: 11, color: '#7d8590' }}>
                   {ankiConnected ? 'Connected' : ankiConnected === false ? 'Not connected' : 'Checking...'}
@@ -1589,124 +1605,81 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                 </button>
               </div>
 
-              {/* Card Format — collapsible sub-section */}
-              <button
-                onClick={() => setSettingsSection(settingsSection === 'format' ? null : 'format')}
-                style={{
-                  width: '100%', textAlign: 'left', padding: '6px 10px', borderRadius: 5,
-                  fontSize: 11, fontFamily: 'inherit', cursor: 'pointer',
-                  background: settingsSection === 'format' ? 'rgba(210,168,255,.15)' : 'rgba(210,168,255,.06)',
-                  color: '#d2a8ff', border: '1px solid rgba(210,168,255,.2)', fontWeight: 600,
-                }}
+              {/* Card Format — nested collapsible */}
+              <button onClick={() => setSettingsSection(settingsSection === 'format' ? 'anki' : 'format')}
+                style={{ width: '100%', textAlign: 'left', padding: '5px 10px', borderRadius: 5, fontSize: 11, fontFamily: 'inherit', cursor: 'pointer', background: settingsSection === 'format' ? 'rgba(210,168,255,.15)' : 'rgba(210,168,255,.06)', color: '#d2a8ff', border: '1px solid rgba(210,168,255,.2)', fontWeight: 600 }}
               >
                 {settingsSection === 'format' ? '\u25BC' : '\u25B6'} Card Format
               </button>
               {settingsSection === 'format' && (
-                <div style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 8, borderLeft: '2px solid rgba(210,168,255,.2)', marginLeft: 4 }}>
+                <div style={{ padding: '6px 10px', display: 'flex', flexDirection: 'column', gap: 8, borderLeft: '2px solid rgba(210,168,255,.2)', marginLeft: 4 }}>
                   <div style={{ display: 'flex', gap: 8 }}>
-                    <input
-                      value={modeEditInput}
-                      onChange={(e) => setModeEditInput(e.target.value)}
+                    <input value={modeEditInput} onChange={(e) => setModeEditInput(e.target.value)}
                       onKeyDown={(e) => { if (e.key === 'Enter' && modeEditInput.trim()) { editModeWithAI(modeEditInput.trim()); setModeEditInput('') } }}
                       placeholder="Ask AI to change format (e.g. 'add a mnemonic field')"
-                      style={{ ...S.keyInput, flex: 1, fontSize: 11 }}
-                      disabled={modeCreating}
+                      style={{ ...S.keyInput, flex: 1, fontSize: 11 }} disabled={modeCreating}
                     />
-                    <button
-                      onClick={() => { if (modeEditInput.trim()) { editModeWithAI(modeEditInput.trim()); setModeEditInput('') } }}
+                    <button onClick={() => { if (modeEditInput.trim()) { editModeWithAI(modeEditInput.trim()); setModeEditInput('') } }}
                       disabled={modeCreating || !modeEditInput.trim()}
                       style={{ ...S.getKeyLink, opacity: modeCreating ? 0.5 : 1, fontSize: 10 }}
-                    >
-                      {modeCreating ? '...' : 'AI Edit'}
-                    </button>
+                    >{modeCreating ? '...' : 'AI Edit'}</button>
                   </div>
                   <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
                     {Object.entries(ankiFormat.fields).map(([field, enabled]) => (
                       <label key={field} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: enabled ? '#e6edf3' : '#7d8590', cursor: 'pointer' }}>
-                        <input type="checkbox" checked={enabled}
-                          onChange={() => updateActiveMode({ fields: { ...ankiFormat.fields, [field]: !enabled } })}
-                        />
-                        {field}
+                        <input type="checkbox" checked={enabled} onChange={() => updateActiveMode({ fields: { ...ankiFormat.fields, [field]: !enabled } })} /> {field}
                       </label>
                     ))}
                   </div>
                   <div>
                     <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 4 }}>Front template</div>
-                    <input value={ankiFormat.frontTemplate}
-                      onChange={(e) => updateActiveMode({ frontTemplate: e.target.value })}
-                      style={{ ...S.keyInput, fontSize: 11 }}
-                    />
+                    <input value={ankiFormat.frontTemplate} onChange={(e) => updateActiveMode({ frontTemplate: e.target.value })} style={{ ...S.keyInput, fontSize: 11 }} />
                   </div>
                   <div>
                     <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 4 }}>Back template</div>
-                    <textarea value={ankiFormat.backTemplate}
-                      onChange={(e) => updateActiveMode({ backTemplate: e.target.value })}
-                      style={{ ...S.keyInput, fontSize: 11, minHeight: 70, resize: 'vertical' }}
-                    />
+                    <textarea value={ankiFormat.backTemplate} onChange={(e) => updateActiveMode({ backTemplate: e.target.value })} style={{ ...S.keyInput, fontSize: 11, minHeight: 70, resize: 'vertical' }} />
                   </div>
-                  <div style={{ fontSize: 10, color: '#484f58' }}>
-                    Placeholders: {'{word}'} {'{term}'} {'{partOfSpeech}'} {'{pronunciation}'} {'{translation}'} {'{synonyms}'} {'{definition}'} {'{example}'}
-                  </div>
+                  <div style={{ fontSize: 10, color: '#484f58' }}>Placeholders: {'{word}'} {'{term}'} {'{partOfSpeech}'} {'{pronunciation}'} {'{translation}'} {'{synonyms}'} {'{definition}'} {'{example}'}</div>
                 </div>
               )}
 
-              {/* Tag Rules — collapsible sub-section */}
-              <button
-                onClick={() => setSettingsSection(settingsSection === 'tags' ? null : 'tags')}
-                style={{
-                  width: '100%', textAlign: 'left', padding: '6px 10px', borderRadius: 5,
-                  fontSize: 11, fontFamily: 'inherit', cursor: 'pointer',
-                  background: settingsSection === 'tags' ? 'rgba(126,231,135,.15)' : 'rgba(126,231,135,.06)',
-                  color: '#7ee787', border: '1px solid rgba(126,231,135,.2)', fontWeight: 600,
-                }}
+              {/* Tag Rules — nested collapsible */}
+              <button onClick={() => setSettingsSection(settingsSection === 'tags' ? 'anki' : 'tags')}
+                style={{ width: '100%', textAlign: 'left', padding: '5px 10px', borderRadius: 5, fontSize: 11, fontFamily: 'inherit', cursor: 'pointer', background: settingsSection === 'tags' ? 'rgba(126,231,135,.15)' : 'rgba(126,231,135,.06)', color: '#7ee787', border: '1px solid rgba(126,231,135,.2)', fontWeight: 600 }}
               >
                 {settingsSection === 'tags' ? '\u25BC' : '\u25B6'} Tag Rules
               </button>
               {settingsSection === 'tags' && (
-                <div style={{ padding: '8px 10px', borderLeft: '2px solid rgba(126,231,135,.2)', marginLeft: 4 }}>
+                <div style={{ padding: '6px 10px', borderLeft: '2px solid rgba(126,231,135,.2)', marginLeft: 4 }}>
                   <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 4 }}>AI reads these rules when generating tags for cards</div>
-                  <textarea value={activeMode.tagRules || ''}
-                    onChange={(e) => updateActiveMode({ tagRules: e.target.value })}
+                  <textarea value={activeMode.tagRules || ''} onChange={(e) => updateActiveMode({ tagRules: e.target.value })}
                     style={{ ...S.keyInput, fontSize: 11, minHeight: 80, resize: 'vertical', width: '100%', boxSizing: 'border-box' }}
-                    placeholder="Instructions for AI tag generation..."
-                  />
+                    placeholder="Instructions for AI tag generation..." />
                 </div>
               )}
 
-              {/* Study Rules — collapsible sub-section */}
-              <button
-                onClick={() => setSettingsSection(settingsSection === 'study' ? null : 'study')}
-                style={{
-                  width: '100%', textAlign: 'left', padding: '6px 10px', borderRadius: 5,
-                  fontSize: 11, fontFamily: 'inherit', cursor: 'pointer',
-                  background: settingsSection === 'study' ? 'rgba(255,166,87,.15)' : 'rgba(255,166,87,.06)',
-                  color: '#ffa657', border: '1px solid rgba(255,166,87,.2)', fontWeight: 600,
-                }}
+              {/* Study Rules — nested collapsible */}
+              <button onClick={() => setSettingsSection(settingsSection === 'study' ? 'anki' : 'study')}
+                style={{ width: '100%', textAlign: 'left', padding: '5px 10px', borderRadius: 5, fontSize: 11, fontFamily: 'inherit', cursor: 'pointer', background: settingsSection === 'study' ? 'rgba(255,166,87,.15)' : 'rgba(255,166,87,.06)', color: '#ffa657', border: '1px solid rgba(255,166,87,.2)', fontWeight: 600 }}
               >
                 {settingsSection === 'study' ? '\u25BC' : '\u25B6'} Study Rules
               </button>
               {settingsSection === 'study' && (
-                <div style={{ padding: '8px 10px', borderLeft: '2px solid rgba(255,166,87,.2)', marginLeft: 4, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ padding: '6px 10px', borderLeft: '2px solid rgba(255,166,87,.2)', marginLeft: 4, display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 2 }}>Questions per card</div>
-                  <input
-                    type="number" min="1" max="10"
-                    value={activeMode.studyRules?.questionsPerCard || 3}
+                  <input type="number" min="1" max="10" value={activeMode.studyRules?.questionsPerCard || 3}
                     onChange={(e) => updateActiveMode({ studyRules: { ...(activeMode.studyRules || defaultStudyRules), questionsPerCard: parseInt(e.target.value) || 3 } })}
-                    style={{ ...S.keyInput, fontSize: 11, width: 60 }}
-                  />
+                    style={{ ...S.keyInput, fontSize: 11, width: 60 }} />
                   <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 2 }}>Question pool (one per line, use {'{front}'} and {'{back}'} placeholders)</div>
                   <textarea
                     value={(activeMode.studyRules?.questions || (activeMode.type === 'language' ? defaultStudyRules : defaultGeneralStudyRules).questions).join('\n')}
                     onChange={(e) => updateActiveMode({ studyRules: { ...(activeMode.studyRules || defaultStudyRules), questions: e.target.value.split('\n').filter((q) => q.trim()) } })}
                     style={{ ...S.keyInput, fontSize: 11, minHeight: 100, resize: 'vertical', width: '100%', boxSizing: 'border-box' }}
-                    placeholder='What does "{front}" mean?'
-                  />
+                    placeholder='What does "{front}" mean?' />
                   <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 2 }}>Rating rules</div>
-                  <input
-                    value={activeMode.studyRules?.ratingRules || defaultStudyRules.ratingRules}
+                  <input value={activeMode.studyRules?.ratingRules || defaultStudyRules.ratingRules}
                     onChange={(e) => updateActiveMode({ studyRules: { ...(activeMode.studyRules || defaultStudyRules), ratingRules: e.target.value } })}
-                    style={{ ...S.keyInput, fontSize: 11 }}
-                  />
+                    style={{ ...S.keyInput, fontSize: 11 }} />
                 </div>
               )}
 
