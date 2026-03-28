@@ -357,6 +357,38 @@ function apiPlugin() {
 
       // (old knowledge endpoint removed — moved before /api/modes)
 
+      // Launch overlay endpoint
+      let overlayProcess = null
+      server.middlewares.use('/api/launch-overlay', (req, res) => {
+        if (req.method === 'POST') {
+          res.setHeader('Content-Type', 'application/json')
+          if (overlayProcess && !overlayProcess.killed) {
+            res.end(JSON.stringify({ ok: true, status: 'already running' }))
+            return
+          }
+          try {
+            const { spawn } = require('child_process')
+            const electronPath = require.resolve('electron/cli.js')
+            overlayProcess = spawn(process.execPath, [electronPath, path.resolve('electron/main.js')], {
+              stdio: 'inherit', detached: false,
+            })
+            overlayProcess.on('exit', () => { overlayProcess = null })
+            res.end(JSON.stringify({ ok: true, status: 'launched' }))
+          } catch (e) {
+            try {
+              const { spawn } = require('child_process')
+              overlayProcess = spawn('npx', ['electron', path.resolve('electron/main.js')], {
+                stdio: 'inherit', detached: false, shell: true,
+              })
+              overlayProcess.on('exit', () => { overlayProcess = null })
+              res.end(JSON.stringify({ ok: true, status: 'launched via npx' }))
+            } catch (e2) {
+              res.end(JSON.stringify({ error: 'Electron not installed. Run: npm install electron --save-optional' }))
+            }
+          }
+        } else { res.statusCode = 405; res.end('') }
+      })
+
       // Ensure directory endpoint
       server.middlewares.use('/api/ensure-dir', (req, res) => {
         if (req.method === 'POST') {

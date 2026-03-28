@@ -1909,6 +1909,15 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
             </button>
           </div>
 
+          <button onClick={() => {
+            fetch('/api/launch-overlay', { method: 'POST' })
+              .then(r => r.json())
+              .then(d => { if (d.error) alert(d.error); else console.log('[Overlay] launched') })
+              .catch(() => alert('Failed to launch overlay. Make sure Electron is installed: npm install electron --save-optional'))
+          }} style={{ ...S.ghostBtn, color: '#d2a8ff', borderColor: 'rgba(210,168,255,0.25)' }}>
+            Overlay
+          </button>
+
           <kbd style={S.kbd}>Ctrl+Shift+S</kbd>
         </div>
       </header>
