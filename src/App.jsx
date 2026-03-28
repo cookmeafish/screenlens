@@ -134,12 +134,16 @@ export default function App() {
   const defaultStudyRules = {
     questionsPerCard: 3,
     cardsAtOnce: 3,
+    studyLanguage: 'English',
+    grammarFeedback: false,
     questionPrompt: 'You are quizzing a language learner on a flashcard.\n\nGenerate clear, specific questions that test whether the student truly knows this word/phrase. Mix question types:\n- Meaning and translation questions\n- Usage in context (give a scenario, ask them to fill in the word)\n- Synonyms, antonyms, or related words\n- Grammar questions (part of speech, conjugation, gender)\n\nRULES:\n- Questions must be precise and have ONE clear correct answer based on the card content\n- Never ask "what is the primary purpose" or "what is the main reason" — these are ambiguous\n- Never ask questions where multiple answers from the card could be valid\n- Each question must stand on its own — do not reference other questions\n- If the card has a list of points, ask about specific items, not "what is the primary one"',
     ratingRules: 'All correct = Easy, 1 wrong = AI judges Good or Hard based on answer quality, 2 wrong = Hard, All wrong = Again',
   }
   const defaultGeneralStudyRules = {
     questionsPerCard: 3,
     cardsAtOnce: 3,
+    studyLanguage: 'English',
+    grammarFeedback: false,
     questionPrompt: 'You are quizzing a student on a flashcard for their studies.\n\nGenerate clear, specific questions that test understanding of this concept. Mix question types:\n- Definition and explanation questions\n- Real-world application or scenario questions\n- Compare/contrast with related concepts\n- Why it matters or when you would use it\n\nRULES:\n- Questions must be precise and have ONE clear correct answer based on the card content\n- Never ask "what is the primary purpose" or "what is the main reason" — these are ambiguous\n- Never ask questions where multiple answers from the card could be valid\n- Each question must stand on its own — do not reference other questions\n- If the card has a list of points, ask about specific items, not "what is the primary one"\n- Questions should be answerable in 1-2 sentences',
     ratingRules: 'All correct = Easy, 1 wrong = AI judges Good or Hard based on answer quality, 2 wrong = Hard, All wrong = Again',
   }
@@ -175,6 +179,8 @@ export default function App() {
   const [studyLoading, setStudyLoading] = useState(false)
   const [studyStats, setStudyStats] = useState({ easy: 0, good: 0, hard: 0, again: 0 })
   const [studyDeckStats, setStudyDeckStats] = useState({ new_count: 0, learn_count: 0, review_count: 0 })
+  const [studyKnowledge, setStudyKnowledge] = useState(null)
+  const [studyKnowledgeCount, setStudyKnowledgeCount] = useState(0)
 
   // Deck browser
   const [deckBrowserActive, setDeckBrowserActive] = useState(false)
@@ -1195,6 +1201,12 @@ Output ONLY raw JSON. No markdown, no backticks.`
       if (!cardIds || cardIds.length === 0) cardIds = await ankiFindCards(`deck:"${deck}"`)
       if (!cardIds || cardIds.length === 0) { setAnkiError('No cards found in this deck'); setStudyLoading(false); return }
 
+      // Load knowledge base
+      const knowledgeRes = await fetch(`/api/modes/knowledge?mode=${encodeURIComponent(activeMode.name)}`).then(r => r.json()).catch(() => ({ content: null, fileCount: 0 }))
+      setStudyKnowledge(knowledgeRes.content)
+      setStudyKnowledgeCount(knowledgeRes.fileCount || 0)
+      console.log('[Study] knowledge base:', knowledgeRes.fileCount || 0, 'files')
+
       // Fetch live deck stats
       const stats = await ankiGetDeckStats([deck]).catch(() => ({}))
       const deckStat = Object.values(stats)[0] || { new_count: 0, learn_count: 0, review_count: 0 }
@@ -1233,7 +1245,9 @@ Output ONLY raw JSON. No markdown, no backticks.`
       const back = getCardBack(card)
       let questions = []
       try {
-        const prompt = `Card front: "${front}"\nCard back: "${back}"\n\nGenerate exactly ${questionsPerCard} quiz questions for this flashcard.\n\n${questionPrompt}\n\nReturn a JSON array of ${questionsPerCard} question strings. Output ONLY raw JSON. No markdown, no backticks.`
+        const studyLang = rules.studyLanguage || 'English'
+        const knowledgeContext = studyKnowledge ? `\n\nReference material for this subject:\n${studyKnowledge.substring(0, 4000)}\n\nUse this context to create more specific questions when relevant.` : ''
+        const prompt = `Card front: "${front}"\nCard back: "${back}"\n\nGenerate exactly ${questionsPerCard} quiz questions for this flashcard.\n\n${questionPrompt}\n\nGenerate all questions in ${studyLang}. The student will answer in ${studyLang}.${knowledgeContext}\n\nReturn a JSON array of ${questionsPerCard} question strings. Output ONLY raw JSON. No markdown, no backticks.`
         const text = await providerConfig.call(apiKey, 'You generate flashcard quiz questions. Always respond with a valid JSON array of strings.', prompt)
         questions = JSON.parse(text.trim().replace(/^```json?\s*/i, '').replace(/```\s*$/, ''))
         if (!Array.isArray(questions)) questions = [`What does "${front}" mean?`]
@@ -1274,7 +1288,17 @@ Output ONLY raw JSON. No markdown, no backticks.`
     setStudyInput('')
 
     try {
-      const prompt = `You are evaluating a student's answer to a flashcard question.\n\nCard front: "${cs.front}"\nCard back: "${cs.back}"\nQuestion: "${question}"\nStudent's answer: "${answer}"\n\nEvaluate: is the answer correct, partially correct, or wrong?\nRespond with JSON: {"correct": true/false, "feedback": "brief explanation"}`
+      const rules = activeMode.studyRules || defaultStudyRules
+      const studyLang = rules.studyLanguage || 'English'
+      const grammarOn = rules.grammarFeedback || false
+      const knowledgeContext = studyKnowledge ? `\n\nReference material:\n${studyKnowledge.substring(0, 2000)}` : ''
+      const grammarInstructions = grammarOn
+        ? `\n\nAlso evaluate grammar/spelling in ${studyLang}. Include:\n- "grammarNote": grammar/spelling correction if any issues, or null if perfect\n- "grammarRelevant": true ONLY if the grammar error directly relates to what the card is testing (e.g. wrong conjugation on a conjugation card), false for general typos`
+        : ''
+      const responseFormat = grammarOn
+        ? '{"correct": true/false, "feedback": "brief explanation", "grammarNote": "correction or null", "grammarRelevant": true/false}'
+        : '{"correct": true/false, "feedback": "brief explanation"}'
+      const prompt = `You are evaluating a student's answer to a flashcard question.\n\nCard front: "${cs.front}"\nCard back: "${cs.back}"\nQuestion: "${question}"\nStudent's answer: "${answer}"\n\nThe student is answering in ${studyLang}.\nEvaluate: is the answer factually/conceptually correct based on the card?${grammarInstructions}${knowledgeContext}\nRespond with JSON: ${responseFormat}`
       const text = await providerConfig.call(apiKey, 'You evaluate flashcard answers. Always respond with valid JSON only.', prompt)
       const result = JSON.parse(text.trim().replace(/^```json?\s*/i, '').replace(/```\s*$/, ''))
 
@@ -1287,20 +1311,23 @@ Output ONLY raw JSON. No markdown, no backticks.`
       }
 
       // Check if this card is done (all questions answered)
-      const rules = activeMode.studyRules || defaultStudyRules
-      const qpc = rules.questionsPerCard || 3
+      const qpc = (activeMode.studyRules || defaultStudyRules).questionsPerCard || 3
       if (newStates[current.cardIdx].results.length >= qpc) {
         newStates[current.cardIdx].done = true
         // Rate this card
-        const wrongCount = newStates[current.cardIdx].results.filter((r) => !r.correct).length
+        const wrongCount = newStates[current.cardIdx].results.filter((r) => !r.correct || r.grammarRelevant).length
         let ease, label
         if (wrongCount === 0) { ease = 4; label = 'easy' }
         else if (wrongCount === 1) { ease = 3; label = 'good' }
         else if (wrongCount >= qpc) { ease = 1; label = 'again' }
         else { ease = 2; label = 'hard' }
         newStates[current.cardIdx].rating = label
-        try { await ankiAnswerCards([{ cardId: cs.cardId, ease }]) } catch {}
-        ankiSync().catch((err) => console.warn('[Anki] AnkiWeb sync failed:', err.message))
+        try {
+          await ankiAnswerCards([{ cardId: cs.cardId, ease }])
+          ankiSync().catch(() => {})
+        } catch (err) {
+          console.warn('[Study] failed to rate card (may be deleted):', err.message)
+        }
         // Refresh deck stats live
         ankiGetDeckStats([studyDeck]).then((s) => {
           const ds = Object.values(s)[0]
@@ -2021,7 +2048,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
               </button>
               {settingsSection === 'study' && (
                 <div style={{ padding: '6px 10px', borderLeft: '2px solid rgba(255,166,87,.2)', marginLeft: 4, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div style={{ display: 'flex', gap: 16 }}>
+                  <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
                     <div>
                       <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 2 }}>Questions per card</div>
                       <input type="number" min="1" max="10" value={activeMode.studyRules?.questionsPerCard || 3}
@@ -2029,10 +2056,28 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                         style={{ ...S.keyInput, fontSize: 11, width: 60 }} />
                     </div>
                     <div>
-                      <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 2 }}>Cards at once (interleaved)</div>
+                      <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 2 }}>Cards at once</div>
                       <input type="number" min="1" max="10" value={activeMode.studyRules?.cardsAtOnce || 3}
                         onChange={(e) => updateActiveMode({ studyRules: { ...(activeMode.studyRules || defaultStudyRules), cardsAtOnce: parseInt(e.target.value) || 3 } })}
                         style={{ ...S.keyInput, fontSize: 11, width: 60 }} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 2 }}>Quiz language</div>
+                      <select value={activeMode.studyRules?.studyLanguage || 'English'}
+                        onChange={(e) => updateActiveMode({ studyRules: { ...(activeMode.studyRules || defaultStudyRules), studyLanguage: e.target.value } })}
+                        style={{ ...S.select, fontSize: 11, minWidth: 100 }}>
+                        {LANGS.filter(l => l.code !== 'auto').map(l => (
+                          <option key={l.code} value={l.label}>{l.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 2 }}>Grammar feedback</div>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#7d8590', cursor: 'pointer' }}>
+                        <input type="checkbox" checked={activeMode.studyRules?.grammarFeedback || false}
+                          onChange={(e) => updateActiveMode({ studyRules: { ...(activeMode.studyRules || defaultStudyRules), grammarFeedback: e.target.checked } })} />
+                        {activeMode.studyRules?.grammarFeedback ? 'On' : 'Off'}
+                      </label>
                     </div>
                   </div>
                   <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 2 }}>Question generation prompt (AI uses this to create questions per card)</div>
@@ -2165,6 +2210,27 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                   </select>
                 </div>
 
+                {/* Language & grammar options */}
+                <div style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 10, padding: '10px 20px',
+                  background: '#1c2129', border: '1px solid #2a3040', borderRadius: 8, marginBottom: 16,
+                }}>
+                  <span style={{ fontSize: 12, color: '#7d8590' }}>Quiz in:</span>
+                  <select value={activeMode.studyRules?.studyLanguage || 'English'}
+                    onChange={(e) => updateActiveMode({ studyRules: { ...(activeMode.studyRules || defaultStudyRules), studyLanguage: e.target.value } })}
+                    style={{ ...S.select, fontSize: 11, padding: '4px 8px' }}>
+                    {LANGS.filter(l => l.code !== 'auto').map(l => (
+                      <option key={l.code} value={l.label}>{l.label}</option>
+                    ))}
+                  </select>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#7d8590', cursor: 'pointer' }}>
+                    <input type="checkbox" checked={activeMode.studyRules?.grammarFeedback || false}
+                      onChange={(e) => updateActiveMode({ studyRules: { ...(activeMode.studyRules || defaultStudyRules), grammarFeedback: e.target.checked } })}
+                    />
+                    Grammar feedback
+                  </label>
+                </div>
+
                 <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 8 }}>
                   <button onClick={() => beginStudy(studyDeck)} disabled={!studyDeck || studyLoading}
                     style={{ ...S.captureBtn, borderRadius: 6, padding: '10px 24px', fontSize: 13, opacity: !studyDeck || studyLoading ? 0.5 : 1 }}>
@@ -2274,6 +2340,11 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                         <div style={{ color: prevResult.correct ? '#7ee787' : '#ffa657', lineHeight: 1.5 }}>
                           {prevResult.feedback}
                         </div>
+                        {prevResult.grammarNote && (
+                          <div style={{ color: '#d2a8ff', fontSize: 11, marginTop: 4, fontStyle: 'italic' }}>
+                            {prevResult.grammarRelevant ? '\u26A0\uFE0F' : '\u{1F4A1}'} Grammar: {prevResult.grammarNote}
+                          </div>
+                        )}
                       </div>
                     )
                   })()}
@@ -2315,6 +2386,11 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                           <div style={{ color: cs.results[qi]?.correct ? '#7ee787' : '#ffa657', lineHeight: 1.5, fontSize: 11 }}>
                             {cs.results[qi]?.feedback}
                           </div>
+                          {cs.results[qi]?.grammarNote && (
+                            <div style={{ color: '#d2a8ff', fontSize: 10, marginTop: 2, fontStyle: 'italic' }}>
+                              {cs.results[qi]?.grammarRelevant ? '\u26A0\uFE0F' : '\u{1F4A1}'} Grammar: {cs.results[qi]?.grammarNote}
+                            </div>
+                          )}
                         </div>
                       ))}
                       <div style={{ padding: '4px 12px', borderTop: '1px solid #2a3040', fontSize: 10, color: '#484f58' }}>

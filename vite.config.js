@@ -281,6 +281,32 @@ function apiPlugin() {
         }
       })
 
+      // Knowledge base endpoint — reads .txt/.md files from mode's knowledge folder
+      server.middlewares.use('/api/modes/knowledge', (req, res) => {
+        res.setHeader('Content-Type', 'application/json')
+        try {
+          const url = new URL(req.url, 'http://x')
+          const modeName = url.searchParams.get('mode') || ''
+          const sanitized = (modeName || '').replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim()
+          const knowledgeDir = path.join(MODES_DIR, sanitized, 'knowledge')
+
+          if (!sanitized || !fs.existsSync(knowledgeDir)) {
+            res.end(JSON.stringify({ content: null, fileCount: 0 }))
+            return
+          }
+
+          const files = fs.readdirSync(knowledgeDir).filter(f => f.match(/\.(txt|md)$/i))
+          const content = files.map(f => {
+            const text = fs.readFileSync(path.join(knowledgeDir, f), 'utf-8')
+            return `--- ${f} ---\n${text}`
+          }).join('\n\n')
+
+          res.end(JSON.stringify({ content: content || null, fileCount: files.length }))
+        } catch {
+          res.end(JSON.stringify({ content: null, fileCount: 0 }))
+        }
+      })
+
       // Config endpoint
       server.middlewares.use('/api/config', (req, res) => {
         if (req.method === 'GET') {
