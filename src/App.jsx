@@ -1912,7 +1912,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
 
       {/* ── Study Session ────────────────────────────────────────────────────── */}
       {studyActive && (
-        <main style={{ ...S.main, justifyContent: 'center', alignItems: 'center' }}>
+        <main style={{ ...S.main, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
           <div style={{ maxWidth: 600, width: '100%', padding: '40px 20px' }}>
 
             {/* Deck picker phase */}
