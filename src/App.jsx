@@ -1580,7 +1580,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
               color: '#58a6ff', border: '1px solid rgba(88,166,255,.25)',
             }}
           >
-            {settingsSection ? '\u25BC' : '\u25B6'} Anki {ankiConnected ? '' : ankiConnected === false ? '(offline)' : ''}
+            {settingsSection ? '\u25BC' : '\u25B6'} Anki Settings {ankiConnected ? '' : ankiConnected === false ? '(offline)' : ''}
           </button>
 
           {settingsSection && (
