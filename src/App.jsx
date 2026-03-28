@@ -2178,7 +2178,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
 
           {/* Knowledge Base — top-level collapsible */}
           <button
-            onClick={() => { setShowKnowledgeSection(!showKnowledgeSection) }}
+            onClick={() => { const opening = !showKnowledgeSection; setShowKnowledgeSection(opening); if (opening) loadKnowledgeFiles() }}
             style={{
               width: '100%', textAlign: 'left', padding: '8px 12px', borderRadius: 6,
               fontSize: 12, fontFamily: 'inherit', cursor: 'pointer', fontWeight: 700,
@@ -2189,7 +2189,6 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
             {showKnowledgeSection ? '\u25BC' : '\u25B6'} Knowledge Base
           </button>
           {showKnowledgeSection && (() => {
-            if (knowledgeFiles.length === 0 && showKnowledgeSection) loadKnowledgeFiles()
             return (
               <div style={{ paddingLeft: 8, borderLeft: '2px solid rgba(126,231,135,.2)', display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <div style={{ fontSize: 11, color: '#7d8590' }}>
