@@ -135,13 +135,13 @@ export default function App() {
   const defaultStudyRules = {
     questionsPerCard: 3,
     cardsAtOnce: 3,
-    questionPrompt: 'You are quizzing a language learner on a flashcard.\n\nGenerate clear, specific questions that test whether the student truly knows this word/phrase. Mix question types:\n- Meaning and translation questions\n- Usage in context (give a scenario, ask them to fill in the word)\n- Synonyms, antonyms, or related words\n- Grammar questions (part of speech, conjugation, gender)\n\nQuestions should be direct and unambiguous. Avoid vague questions like "what is the root of this word" unless the etymology is on the card.\n\nIMPORTANT: Each question must stand on its own. Do not reference or build upon other questions.',
+    questionPrompt: 'You are quizzing a language learner on a flashcard.\n\nGenerate clear, specific questions that test whether the student truly knows this word/phrase. Mix question types:\n- Meaning and translation questions\n- Usage in context (give a scenario, ask them to fill in the word)\n- Synonyms, antonyms, or related words\n- Grammar questions (part of speech, conjugation, gender)\n\nRULES:\n- Questions must be precise and have ONE clear correct answer based on the card content\n- Never ask "what is the primary purpose" or "what is the main reason" — these are ambiguous\n- Never ask questions where multiple answers from the card could be valid\n- Each question must stand on its own — do not reference other questions\n- If the card has a list of points, ask about specific items, not "what is the primary one"',
     ratingRules: 'All correct = Easy, 1 wrong = AI judges Good or Hard based on answer quality, 2 wrong = Hard, All wrong = Again',
   }
   const defaultGeneralStudyRules = {
     questionsPerCard: 3,
     cardsAtOnce: 3,
-    questionPrompt: 'You are quizzing a student on a flashcard for their studies.\n\nGenerate clear, specific questions that test understanding of this concept. Mix question types:\n- Definition and explanation questions\n- Real-world application or scenario questions\n- Compare/contrast with related concepts\n- Why it matters or when you would use it\n\nQuestions should be direct and answerable in 1-2 sentences. Base questions on what the card actually contains — don\'t ask about information not on the card.\n\nIMPORTANT: Each question must stand on its own. Do not reference or build upon other questions.',
+    questionPrompt: 'You are quizzing a student on a flashcard for their studies.\n\nGenerate clear, specific questions that test understanding of this concept. Mix question types:\n- Definition and explanation questions\n- Real-world application or scenario questions\n- Compare/contrast with related concepts\n- Why it matters or when you would use it\n\nRULES:\n- Questions must be precise and have ONE clear correct answer based on the card content\n- Never ask "what is the primary purpose" or "what is the main reason" — these are ambiguous\n- Never ask questions where multiple answers from the card could be valid\n- Each question must stand on its own — do not reference other questions\n- If the card has a list of points, ask about specific items, not "what is the primary one"\n- Questions should be answerable in 1-2 sentences',
     ratingRules: 'All correct = Easy, 1 wrong = AI judges Good or Hard based on answer quality, 2 wrong = Hard, All wrong = Again',
   }
   const defaultMode = {
@@ -2020,20 +2020,32 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                     </button>
                   </div>
 
-                  {/* Last answer feedback (brief) */}
+                  {/* Last answer feedback (structured) */}
                   {studyQueueIdx > 0 && (() => {
                     const prev = studyQueue[studyQueueIdx - 1]
                     const prevCs = studyCardState[prev.cardIdx]
+                    const prevQ = prevCs.questions[prev.questionIdx]
+                    const prevA = prevCs.answers[prevCs.answers.length - 1]
                     const prevResult = prevCs.results[prevCs.results.length - 1]
                     if (!prevResult) return null
                     return (
                       <div style={{
-                        marginTop: 8, padding: '6px 10px', borderRadius: 5, fontSize: 11,
+                        marginTop: 12, padding: '10px 14px', borderRadius: 6, fontSize: 12,
                         background: prevResult.correct ? 'rgba(126,231,135,.06)' : 'rgba(248,81,73,.06)',
                         border: `1px solid ${prevResult.correct ? 'rgba(126,231,135,.15)' : 'rgba(248,81,73,.15)'}`,
-                        color: prevResult.correct ? '#7ee787' : '#ffa657',
                       }}>
-                        {prevResult.correct ? '\u2713' : '\u2717'} {prevCs.front}: {prevResult.feedback}
+                        <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 4, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                          {prevResult.correct ? '\u2713' : '\u2717'} {prevCs.front}
+                        </div>
+                        <div style={{ color: '#7d8590', marginBottom: 4 }}>
+                          <span style={{ fontWeight: 600 }}>Q:</span> {prevQ}
+                        </div>
+                        <div style={{ color: '#c9d1d9', marginBottom: 6 }}>
+                          <span style={{ fontWeight: 600 }}>Your answer:</span> {prevA}
+                        </div>
+                        <div style={{ color: prevResult.correct ? '#7ee787' : '#ffa657', lineHeight: 1.5 }}>
+                          {prevResult.feedback}
+                        </div>
                       </div>
                     )
                   })()}
@@ -2059,11 +2071,21 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                         </span>
                       </div>
                       {cs.questions.map((q, qi) => (
-                        <div key={qi} style={{ padding: '6px 12px', borderTop: '1px solid #2a3040', fontSize: 11 }}>
-                          <div style={{ color: '#7d8590' }}>{q}</div>
-                          <div style={{ color: '#c9d1d9' }}>Your answer: {cs.answers[qi]}</div>
-                          <div style={{ color: cs.results[qi]?.correct ? '#7ee787' : '#ffa657' }}>
-                            {cs.results[qi]?.correct ? '\u2713' : '\u2717'} {cs.results[qi]?.feedback}
+                        <div key={qi} style={{
+                          padding: '8px 12px', borderTop: '1px solid #2a3040', fontSize: 12,
+                          background: cs.results[qi]?.correct ? 'rgba(126,231,135,.03)' : 'rgba(248,81,73,.03)',
+                        }}>
+                          <div style={{ color: cs.results[qi]?.correct ? '#7ee787' : '#f85149', fontSize: 10, fontWeight: 700, marginBottom: 4 }}>
+                            {cs.results[qi]?.correct ? '\u2713 CORRECT' : '\u2717 INCORRECT'}
+                          </div>
+                          <div style={{ color: '#7d8590', marginBottom: 3 }}>
+                            <span style={{ fontWeight: 600 }}>Q:</span> {q}
+                          </div>
+                          <div style={{ color: '#c9d1d9', marginBottom: 4 }}>
+                            <span style={{ fontWeight: 600 }}>Your answer:</span> {cs.answers[qi]}
+                          </div>
+                          <div style={{ color: cs.results[qi]?.correct ? '#7ee787' : '#ffa657', lineHeight: 1.5, fontSize: 11 }}>
+                            {cs.results[qi]?.feedback}
                           </div>
                         </div>
                       ))}
