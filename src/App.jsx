@@ -183,6 +183,8 @@ export default function App() {
   const [studyDeckStats, setStudyDeckStats] = useState({ new_count: 0, learn_count: 0, review_count: 0 })
   const [studyKnowledge, setStudyKnowledge] = useState(null)
   const [studyKnowledgeCount, setStudyKnowledgeCount] = useState(0)
+  const [knowledgeFiles, setKnowledgeFiles] = useState([])
+  const [knowledgeDragging, setKnowledgeDragging] = useState(false)
 
   // Deck browser
   const [deckBrowserActive, setDeckBrowserActive] = useState(false)
@@ -1129,6 +1131,46 @@ Output ONLY raw JSON. No markdown, no backticks.`
     setDeckBrowserSearch('')
   }
 
+  // ─── Knowledge Base Management ──────────────────────────────────────────
+  const loadKnowledgeFiles = async () => {
+    try {
+      const res = await fetch(`/api/modes/knowledge?mode=${encodeURIComponent(activeMode.name)}`).then(r => r.json())
+      setKnowledgeFiles(res.files || [])
+    } catch { setKnowledgeFiles([]) }
+  }
+
+  const uploadKnowledgeFile = async (file) => {
+    const text = await file.text()
+    await fetch(`/api/modes/knowledge?mode=${encodeURIComponent(activeMode.name)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename: file.name, content: text }),
+    })
+    loadKnowledgeFiles()
+  }
+
+  const deleteKnowledgeFile = async (fileName) => {
+    await fetch(`/api/modes/knowledge?mode=${encodeURIComponent(activeMode.name)}&file=${encodeURIComponent(fileName)}`, { method: 'DELETE' })
+    loadKnowledgeFiles()
+  }
+
+  const toggleKnowledgeFile = async (fileName) => {
+    await fetch(`/api/modes/knowledge?mode=${encodeURIComponent(activeMode.name)}&file=${encodeURIComponent(fileName)}`, { method: 'PATCH' })
+    loadKnowledgeFiles()
+  }
+
+  const handleKnowledgeDrop = (e) => {
+    e.preventDefault()
+    setKnowledgeDragging(false)
+    const files = Array.from(e.dataTransfer.files).filter(f => f.name.match(/\.(txt|md)$/i))
+    files.forEach(uploadKnowledgeFile)
+  }
+
+  const handleKnowledgeFileInput = (e) => {
+    const files = Array.from(e.target.files).filter(f => f.name.match(/\.(txt|md)$/i))
+    files.forEach(uploadKnowledgeFile)
+    e.target.value = ''
+  }
+
   // ─── AI Format Editing ───────────────────────────────────────────────────
   const editModeWithAI = async (instruction) => {
     if (!apiKey || modeCreating) return
@@ -1899,7 +1941,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                   </button>
                 )}
                 {modes.length > 1 && (
-                  <span onClick={() => deleteMode(m.id)} style={{ cursor: 'pointer', color: '#7d8590', fontSize: 12 }}>&times;</span>
+                  <span onClick={() => { if (confirm(`Delete mode "${m.name}"? This will remove all settings for this mode.`)) deleteMode(m.id) }} style={{ cursor: 'pointer', color: '#7d8590', fontSize: 12 }}>&times;</span>
                 )}
               </div>
             ))}
@@ -2113,28 +2155,64 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
           >
             {showKnowledgeSection ? '\u25BC' : '\u25B6'} Knowledge Base
           </button>
-          {showKnowledgeSection && (
-            <div style={{ paddingLeft: 8, borderLeft: '2px solid rgba(126,231,135,.2)', display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={{ fontSize: 11, color: '#c9d1d9' }}>
-                Drop <code>.txt</code> or <code>.md</code> files into the knowledge folder to give the AI extra context when generating study questions and evaluating answers.
+          {showKnowledgeSection && (() => {
+            if (knowledgeFiles.length === 0 && showKnowledgeSection) loadKnowledgeFiles()
+            return (
+              <div style={{ paddingLeft: 8, borderLeft: '2px solid rgba(126,231,135,.2)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ fontSize: 11, color: '#7d8590' }}>
+                  Add .txt or .md files to give the AI extra context for study questions. Optional.
+                </div>
+
+                {/* Drag & drop zone */}
+                <div
+                  onDragOver={(e) => { e.preventDefault(); setKnowledgeDragging(true) }}
+                  onDragLeave={() => setKnowledgeDragging(false)}
+                  onDrop={handleKnowledgeDrop}
+                  style={{
+                    padding: '16px', borderRadius: 6, textAlign: 'center', cursor: 'pointer',
+                    border: `2px dashed ${knowledgeDragging ? 'rgba(126,231,135,.5)' : '#2a3040'}`,
+                    background: knowledgeDragging ? 'rgba(126,231,135,.06)' : 'transparent',
+                    color: '#7d8590', fontSize: 11,
+                  }}
+                  onClick={() => document.getElementById('knowledge-file-input').click()}
+                >
+                  {knowledgeDragging ? 'Drop files here' : 'Drag & drop .txt/.md files here or click to browse'}
+                  <input id="knowledge-file-input" type="file" accept=".txt,.md" multiple
+                    onChange={handleKnowledgeFileInput} style={{ display: 'none' }} />
+                </div>
+
+                {/* File list */}
+                {knowledgeFiles.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {knowledgeFiles.map((f) => (
+                      <div key={f.name} style={{
+                        display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px',
+                        background: f.disabled ? 'rgba(125,133,144,.04)' : 'rgba(126,231,135,.04)',
+                        border: `1px solid ${f.disabled ? '#2a3040' : 'rgba(126,231,135,.15)'}`,
+                        borderRadius: 5, fontSize: 11,
+                      }}>
+                        <span style={{ flex: 1, color: f.disabled ? '#484f58' : '#c9d1d9', textDecoration: f.disabled ? 'line-through' : 'none' }}>
+                          {f.name}
+                        </span>
+                        <span style={{ color: '#484f58', fontSize: 10 }}>{(f.size / 1024).toFixed(1)}KB</span>
+                        <button onClick={() => toggleKnowledgeFile(f.name)}
+                          style={{ ...S.ghostBtn, fontSize: 9, padding: '2px 6px', color: f.disabled ? '#7ee787' : '#7d8590' }}>
+                          {f.disabled ? 'Enable' : 'Disable'}
+                        </button>
+                        <button onClick={() => { if (confirm(`Delete "${f.name}"? This cannot be undone.`)) deleteKnowledgeFile(f.name) }}
+                          style={{ ...S.ghostBtn, fontSize: 9, padding: '2px 6px', color: '#f85149', borderColor: 'rgba(248,81,73,.25)' }}>
+                          Delete
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {knowledgeFiles.length === 0 && (
+                  <div style={{ fontSize: 10, color: '#484f58' }}>No files added yet</div>
+                )}
               </div>
-              <div style={{
-                padding: '10px 14px', background: '#1c2129', border: '1px solid #2a3040', borderRadius: 6,
-                fontSize: 11, fontFamily: 'monospace', color: '#58a6ff',
-              }}>
-                modes/{activeMode.name}/knowledge/
-              </div>
-              <div style={{ fontSize: 10, color: '#7d8590' }}>
-                Files are loaded automatically when starting a study session. This is completely optional — study works without any files.
-              </div>
-              <button onClick={() => {
-                const dir = `modes/${activeMode.name}/knowledge`
-                fetch('/api/ensure-dir', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir }) }).catch(() => {})
-              }} style={{ ...S.getKeyLink, fontSize: 10, alignSelf: 'flex-start' }}>
-                Create Folder
-              </button>
-            </div>
-          )}
+            )
+          })()}
         </div>
       )}
 

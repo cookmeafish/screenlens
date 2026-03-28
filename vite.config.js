@@ -281,30 +281,84 @@ function apiPlugin() {
         }
       })
 
-      // Knowledge base endpoint — reads .txt/.md files from mode's knowledge folder
+      // Knowledge base endpoint
+      // GET ?mode=X → list files + content
+      // POST ?mode=X (multipart-ish: JSON with {filename, content}) → upload file
+      // DELETE ?mode=X&file=Y → delete file
+      // PATCH ?mode=X&file=Y&action=toggle → enable/disable file
       server.middlewares.use('/api/modes/knowledge', (req, res) => {
         res.setHeader('Content-Type', 'application/json')
-        try {
-          const url = new URL(req.url, 'http://x')
-          const modeName = url.searchParams.get('mode') || ''
-          const sanitized = (modeName || '').replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim()
-          const knowledgeDir = path.join(MODES_DIR, sanitized, 'knowledge')
+        const url = new URL(req.url, 'http://x')
+        const modeName = url.searchParams.get('mode') || ''
+        const sanitized = (modeName || '').replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim()
+        const knowledgeDir = path.join(MODES_DIR, sanitized, 'knowledge')
 
-          if (!sanitized || !fs.existsSync(knowledgeDir)) {
-            res.end(JSON.stringify({ content: null, fileCount: 0 }))
-            return
+        if (!sanitized) { res.end(JSON.stringify({ files: [], content: null, fileCount: 0 })); return }
+
+        if (req.method === 'GET') {
+          try {
+            if (!fs.existsSync(knowledgeDir)) { res.end(JSON.stringify({ files: [], content: null, fileCount: 0 })); return }
+            const allFiles = fs.readdirSync(knowledgeDir)
+            const files = allFiles.filter(f => f.match(/\.(txt|md)(\.disabled)?$/i)).map(f => {
+              const disabled = f.endsWith('.disabled')
+              const name = disabled ? f.replace(/\.disabled$/, '') : f
+              const size = fs.statSync(path.join(knowledgeDir, f)).size
+              return { name, disabled, size }
+            })
+            // Only load enabled files for content
+            const enabledFiles = allFiles.filter(f => f.match(/\.(txt|md)$/i))
+            const content = enabledFiles.map(f => {
+              const text = fs.readFileSync(path.join(knowledgeDir, f), 'utf-8')
+              return `--- ${f} ---\n${text}`
+            }).join('\n\n')
+            res.end(JSON.stringify({ files, content: content || null, fileCount: enabledFiles.length }))
+          } catch { res.end(JSON.stringify({ files: [], content: null, fileCount: 0 })) }
+
+        } else if (req.method === 'POST') {
+          const handleBody = (bodyStr) => {
+            try {
+              if (!fs.existsSync(knowledgeDir)) fs.mkdirSync(knowledgeDir, { recursive: true })
+              const { filename, content } = JSON.parse(bodyStr)
+              const safeName = (filename || 'file.txt').replace(/[<>:"/\\|?*]/g, '')
+              fs.writeFileSync(path.join(knowledgeDir, safeName), content, 'utf-8')
+              res.end(JSON.stringify({ ok: true, filename: safeName }))
+            } catch (e) { res.statusCode = 400; res.end(JSON.stringify({ error: e.message })) }
           }
+          if (req.body) { handleBody(typeof req.body === 'string' ? req.body : JSON.stringify(req.body)) }
+          else { let b = ''; req.on('data', c => b += c); req.on('end', () => handleBody(b)) }
 
-          const files = fs.readdirSync(knowledgeDir).filter(f => f.match(/\.(txt|md)$/i))
-          const content = files.map(f => {
-            const text = fs.readFileSync(path.join(knowledgeDir, f), 'utf-8')
-            return `--- ${f} ---\n${text}`
-          }).join('\n\n')
+        } else if (req.method === 'DELETE') {
+          try {
+            const fileName = url.searchParams.get('file')
+            if (!fileName) { res.statusCode = 400; res.end('{"error":"no file"}'); return }
+            const safeName = fileName.replace(/[<>:"/\\|?*]/g, '')
+            // Try both enabled and disabled versions
+            const filePath = path.join(knowledgeDir, safeName)
+            const disabledPath = filePath + '.disabled'
+            if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
+            if (fs.existsSync(disabledPath)) fs.unlinkSync(disabledPath)
+            res.end('{"ok":true}')
+          } catch (e) { res.statusCode = 500; res.end(JSON.stringify({ error: e.message })) }
 
-          res.end(JSON.stringify({ content: content || null, fileCount: files.length }))
-        } catch {
-          res.end(JSON.stringify({ content: null, fileCount: 0 }))
-        }
+        } else if (req.method === 'PATCH') {
+          try {
+            const fileName = url.searchParams.get('file')
+            if (!fileName) { res.statusCode = 400; res.end('{"error":"no file"}'); return }
+            const safeName = fileName.replace(/[<>:"/\\|?*]/g, '')
+            const filePath = path.join(knowledgeDir, safeName)
+            const disabledPath = filePath + '.disabled'
+            if (fs.existsSync(disabledPath)) {
+              fs.renameSync(disabledPath, filePath) // enable
+              res.end(JSON.stringify({ ok: true, disabled: false }))
+            } else if (fs.existsSync(filePath)) {
+              fs.renameSync(filePath, disabledPath) // disable
+              res.end(JSON.stringify({ ok: true, disabled: true }))
+            } else {
+              res.statusCode = 404; res.end('{"error":"file not found"}')
+            }
+          } catch (e) { res.statusCode = 500; res.end(JSON.stringify({ error: e.message })) }
+
+        } else { res.statusCode = 405; res.end('') }
       })
 
       // Ensure directory endpoint
