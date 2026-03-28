@@ -1884,7 +1884,17 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
       {showSettings && (
         <div style={{ ...S.keyBar, flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
           <div style={{ fontSize: 11, color: '#7d8590' }}>
-            Settings for: <strong style={{ color: '#58a6ff' }}>{activeMode.type === 'language' ? '\u{1F310}' : '\u{1F4DA}'} {activeMode.name}</strong>
+            Settings for: {editingModeName === activeModeId ? (
+              <input autoFocus defaultValue={activeMode.name}
+                onBlur={(e) => renameMode(activeModeId, e.target.value || activeMode.name)}
+                onKeyDown={(e) => { if (e.key === 'Enter') renameMode(activeModeId, e.target.value || activeMode.name) }}
+                style={{ ...S.keyInput, width: 150, fontSize: 11, padding: '2px 6px', display: 'inline' }}
+              />
+            ) : (
+              <strong onClick={() => setEditingModeName(activeModeId)} style={{ color: '#58a6ff', cursor: 'pointer' }} title="Click to rename">
+                {activeMode.type === 'language' ? '\u{1F310}' : '\u{1F4DA}'} {activeMode.name}
+              </strong>
+            )}
           </div>
           {/* Anki — top-level collapsible */}
           <button
