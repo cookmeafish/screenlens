@@ -124,7 +124,6 @@ export default function App() {
   const [language, setLanguage] = useState('auto')
   const [targetLang, setTargetLang] = useState('eng')
   const [ankiConnected, setAnkiConnected] = useState(null)
-  const [ankiDeck, setAnkiDeck] = useState('ScreenLens')
   const [ankiDecks, setAnkiDecks] = useState([])
   const [ankiCard, setAnkiCard] = useState(null)
   const [ankiSynced, setAnkiSynced] = useState({})
@@ -145,7 +144,7 @@ export default function App() {
     ratingRules: 'All correct = Easy, 1 wrong = AI judges Good or Hard based on answer quality, 2 wrong = Hard, All wrong = Again',
   }
   const defaultMode = {
-    id: 1, name: 'Language Learning', type: 'language', description: '',
+    id: 1, name: 'Language Learning', type: 'language', description: '', ankiDeck: '',
     fields: { pronunciation: true, translation: true, synonyms: true, definition: true, example: true },
     frontTemplate: '{word} ({partOfSpeech})',
     backTemplate: 'Pronunciación: {pronunciation}\nTraducción: {translation}\nSinónimos: {synonyms}\nDefinición: {definition}\nEjemplo: {example}',
@@ -188,6 +187,16 @@ export default function App() {
 
   const activeMode = modes.find((m) => m.id === activeModeId) || modes[0] || defaultMode
   const ankiFormat = activeMode
+  const ankiDeck = activeMode.ankiDeck || ''
+  const setAnkiDeck = (deck) => {
+    const updated = modes.map((m) => m.id === activeModeId ? { ...m, ankiDeck: deck } : m)
+    setModes(updated)
+    // Save immediately
+    fetch('/api/modes', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ modes: updated, activeModeId }),
+    }).catch(() => {})
+  }
 
   const fileInputRef = useRef(null)
   const containerRef = useRef(null)
@@ -236,7 +245,7 @@ export default function App() {
       if (config.language) setLanguage(config.language)
       if (config.targetLang) setTargetLang(config.targetLang)
       if (config.showHighlights !== undefined) setShowHighlights(config.showHighlights)
-      if (config.ankiDeck) setAnkiDeck(config.ankiDeck)
+      // ankiDeck is now per-mode (stored in mode config)
       setKeysLoaded(true)
       setConfigLoaded(true)
     })
@@ -248,13 +257,15 @@ export default function App() {
       if (ok) ankiGetDecks().then((decks) => {
         setAnkiDecks(decks)
         console.log('[Anki] available decks:', decks)
-        // If saved deck doesn't exist in Anki, default to first available
-        setAnkiDeck((current) => {
-          if (decks.length > 0 && !decks.includes(current)) {
-            console.log('[Anki] saved deck not found, defaulting to:', decks[0])
-            return decks[0]
-          }
-          return current
+        // If active mode has no deck or deck doesn't exist, default to first available
+        setModes((prev) => {
+          const updated = prev.map((m) => {
+            if (!m.ankiDeck || (decks.length > 0 && !decks.includes(m.ankiDeck))) {
+              return { ...m, ankiDeck: decks[0] || '' }
+            }
+            return m
+          })
+          return updated
         })
       }).catch(() => {})
     })
@@ -276,9 +287,9 @@ export default function App() {
     fetch('/api/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider, language, targetLang, showHighlights, ankiDeck }),
+      body: JSON.stringify({ provider, language, targetLang, showHighlights }),
     }).catch(() => {})
-  }, [provider, language, targetLang, showHighlights, ankiDeck, configLoaded])
+  }, [provider, language, targetLang, showHighlights, configLoaded])
 
   const setCurrentKey = (key) => {
     setApiKeys((prev) => ({ ...prev, [provider]: key }))
