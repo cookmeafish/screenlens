@@ -1535,116 +1535,116 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
             <button onClick={() => { setShowModePanel(false); setShowSettings(false); setSettingsSection(null) }} style={S.keyDone}>Done</button>
           </div>
 
-          {/* Anki Settings — shown when gear is clicked */}
-          {showSettings && (
-            <div style={{ borderTop: '1px solid #2a3040', paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: '#58a6ff' }}>Anki Settings</div>
+          {/* Settings — shown when gear is clicked */}
+          {showSettings && (() => {
+            const sectionBtn = (key, label, color, bg) => (
+              <button
+                onClick={() => setSettingsSection(settingsSection === key ? null : key)}
+                style={{
+                  width: '100%', textAlign: 'left', padding: '6px 10px', borderRadius: 5,
+                  fontSize: 11, fontFamily: 'inherit', cursor: 'pointer',
+                  background: settingsSection === key ? `${bg}.15)` : `${bg}.06)`,
+                  color, border: `1px solid ${bg}.2)`, fontWeight: 600,
+                }}
+              >
+                {settingsSection === key ? '\u25BC' : '\u25B6'} {label}
+              </button>
+            )
+            return (
+              <div style={{ borderTop: '1px solid #2a3040', paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
 
-              {/* Connection & Deck */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <span style={{ width: 8, height: 8, borderRadius: '50%', background: ankiConnected ? '#7ee787' : ankiConnected === false ? '#d29922' : '#7d8590', flexShrink: 0 }} />
-                <span style={{ fontSize: 11, color: '#7d8590' }}>
-                  {ankiConnected ? 'Connected' : ankiConnected === false ? 'Not connected' : 'Checking...'}
-                </span>
-                {ankiConnected && ankiDecks.length > 0 && (
-                  <>
-                    <span style={{ fontSize: 11, color: '#7d8590' }}>Deck:</span>
-                    <select value={ankiDeck} onChange={(e) => setAnkiDeck(e.target.value)} style={{ ...S.select, minWidth: 120 }}>
-                      {ankiDecks.map((d) => <option key={d} value={d}>{d}</option>)}
-                    </select>
-                  </>
-                )}
-                <button onClick={refreshAnkiConnection} style={{ ...S.getKeyLink, fontSize: 10 }}>
-                  {ankiConnected === null ? 'Checking...' : 'Refresh'}
-                </button>
-              </div>
-
-              {/* Collapsible sections */}
-              {[
-                { key: 'format', label: 'Card Format', color: '#d2a8ff', bg: 'rgba(210,168,255,' },
-                { key: 'tags', label: 'Tag Rules', color: '#7ee787', bg: 'rgba(126,231,135,' },
-              ].map(({ key, label, color, bg }) => (
-                <div key={key}>
-                  <button
-                    onClick={() => setSettingsSection(settingsSection === key ? null : key)}
-                    style={{
-                      width: '100%', textAlign: 'left', padding: '6px 10px', borderRadius: 5,
-                      fontSize: 11, fontFamily: 'inherit', cursor: 'pointer',
-                      background: settingsSection === key ? `${bg}.15)` : `${bg}.06)`,
-                      color, border: `1px solid ${bg}.2)`,
-                      fontWeight: 600,
-                    }}
-                  >
-                    {settingsSection === key ? '\u25BC' : '\u25B6'} {label}
-                  </button>
-
-                  {/* Card Format section */}
-                  {key === 'format' && settingsSection === 'format' && (
-                    <div style={{ padding: '10px 0', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      <div style={{ display: 'flex', gap: 8 }}>
-                        <input
-                          value={modeEditInput}
-                          onChange={(e) => setModeEditInput(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === 'Enter' && modeEditInput.trim()) { editModeWithAI(modeEditInput.trim()); setModeEditInput('') } }}
-                          placeholder="Ask AI to change format (e.g. 'add a mnemonic field')"
-                          style={{ ...S.keyInput, flex: 1, fontSize: 11 }}
-                          disabled={modeCreating}
-                        />
-                        <button
-                          onClick={() => { if (modeEditInput.trim()) { editModeWithAI(modeEditInput.trim()); setModeEditInput('') } }}
-                          disabled={modeCreating || !modeEditInput.trim()}
-                          style={{ ...S.getKeyLink, opacity: modeCreating ? 0.5 : 1, fontSize: 10 }}
-                        >
-                          {modeCreating ? '...' : 'AI Edit'}
-                        </button>
-                      </div>
-                      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                        {Object.entries(ankiFormat.fields).map(([field, enabled]) => (
-                          <label key={field} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: enabled ? '#e6edf3' : '#7d8590', cursor: 'pointer' }}>
-                            <input type="checkbox" checked={enabled}
-                              onChange={() => updateActiveMode({ fields: { ...ankiFormat.fields, [field]: !enabled } })}
-                            />
-                            {field}
-                          </label>
-                        ))}
-                      </div>
-                      <div>
-                        <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 4 }}>Front template</div>
-                        <input value={ankiFormat.frontTemplate}
-                          onChange={(e) => updateActiveMode({ frontTemplate: e.target.value })}
-                          style={{ ...S.keyInput, fontSize: 11 }}
-                        />
-                      </div>
-                      <div>
-                        <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 4 }}>Back template</div>
-                        <textarea value={ankiFormat.backTemplate}
-                          onChange={(e) => updateActiveMode({ backTemplate: e.target.value })}
-                          style={{ ...S.keyInput, fontSize: 11, minHeight: 70, resize: 'vertical' }}
-                        />
-                      </div>
-                      <div style={{ fontSize: 10, color: '#484f58' }}>
-                        Placeholders: {'{word}'} {'{term}'} {'{partOfSpeech}'} {'{pronunciation}'} {'{translation}'} {'{synonyms}'} {'{definition}'} {'{example}'}
-                      </div>
+                {/* Anki Connection section */}
+                {sectionBtn('anki', `Anki ${ankiConnected ? '(connected)' : ankiConnected === false ? '(offline)' : ''}`, '#58a6ff', 'rgba(88,166,255,')}
+                {settingsSection === 'anki' && (
+                  <div style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: ankiConnected ? '#7ee787' : ankiConnected === false ? '#d29922' : '#7d8590', flexShrink: 0 }} />
+                      <span style={{ fontSize: 11, color: '#7d8590' }}>
+                        {ankiConnected ? 'Connected' : ankiConnected === false ? 'Not connected' : 'Checking...'}
+                      </span>
+                      {ankiConnected && ankiDecks.length > 0 && (
+                        <>
+                          <span style={{ fontSize: 11, color: '#7d8590' }}>Deck:</span>
+                          <select value={ankiDeck} onChange={(e) => setAnkiDeck(e.target.value)} style={{ ...S.select, minWidth: 120 }}>
+                            {ankiDecks.map((d) => <option key={d} value={d}>{d}</option>)}
+                          </select>
+                        </>
+                      )}
+                      <button onClick={refreshAnkiConnection} style={{ ...S.getKeyLink, fontSize: 10 }}>
+                        {ankiConnected === null ? 'Checking...' : 'Refresh'}
+                      </button>
                     </div>
-                  )}
+                    <div style={{ fontSize: 10, color: '#484f58' }}>Requires AnkiConnect addon (code: 2055492159)</div>
+                  </div>
+                )}
 
-                  {/* Tag Rules section */}
-                  {key === 'tags' && settingsSection === 'tags' && (
-                    <div style={{ padding: '10px 0' }}>
-                      <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 4 }}>AI reads these rules when generating tags for cards</div>
-                      <textarea value={activeMode.tagRules || ''}
-                        onChange={(e) => updateActiveMode({ tagRules: e.target.value })}
-                        style={{ ...S.keyInput, fontSize: 11, minHeight: 80, resize: 'vertical', width: '100%', boxSizing: 'border-box' }}
-                        placeholder="Instructions for AI tag generation..."
+                {/* Card Format section */}
+                {sectionBtn('format', 'Card Format', '#d2a8ff', 'rgba(210,168,255,')}
+                {settingsSection === 'format' && (
+                  <div style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <input
+                        value={modeEditInput}
+                        onChange={(e) => setModeEditInput(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter' && modeEditInput.trim()) { editModeWithAI(modeEditInput.trim()); setModeEditInput('') } }}
+                        placeholder="Ask AI to change format (e.g. 'add a mnemonic field')"
+                        style={{ ...S.keyInput, flex: 1, fontSize: 11 }}
+                        disabled={modeCreating}
+                      />
+                      <button
+                        onClick={() => { if (modeEditInput.trim()) { editModeWithAI(modeEditInput.trim()); setModeEditInput('') } }}
+                        disabled={modeCreating || !modeEditInput.trim()}
+                        style={{ ...S.getKeyLink, opacity: modeCreating ? 0.5 : 1, fontSize: 10 }}
+                      >
+                        {modeCreating ? '...' : 'AI Edit'}
+                      </button>
+                    </div>
+                    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                      {Object.entries(ankiFormat.fields).map(([field, enabled]) => (
+                        <label key={field} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: enabled ? '#e6edf3' : '#7d8590', cursor: 'pointer' }}>
+                          <input type="checkbox" checked={enabled}
+                            onChange={() => updateActiveMode({ fields: { ...ankiFormat.fields, [field]: !enabled } })}
+                          />
+                          {field}
+                        </label>
+                      ))}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 4 }}>Front template</div>
+                      <input value={ankiFormat.frontTemplate}
+                        onChange={(e) => updateActiveMode({ frontTemplate: e.target.value })}
+                        style={{ ...S.keyInput, fontSize: 11 }}
                       />
                     </div>
-                  )}
-                </div>
-              ))}
+                    <div>
+                      <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 4 }}>Back template</div>
+                      <textarea value={ankiFormat.backTemplate}
+                        onChange={(e) => updateActiveMode({ backTemplate: e.target.value })}
+                        style={{ ...S.keyInput, fontSize: 11, minHeight: 70, resize: 'vertical' }}
+                      />
+                    </div>
+                    <div style={{ fontSize: 10, color: '#484f58' }}>
+                      Placeholders: {'{word}'} {'{term}'} {'{partOfSpeech}'} {'{pronunciation}'} {'{translation}'} {'{synonyms}'} {'{definition}'} {'{example}'}
+                    </div>
+                  </div>
+                )}
 
-              <div style={{ fontSize: 10, color: '#484f58' }}>Requires Anki with AnkiConnect addon (code: 2055492159)</div>
-            </div>
-          )}
+                {/* Tag Rules section */}
+                {sectionBtn('tags', 'Tag Rules', '#7ee787', 'rgba(126,231,135,')}
+                {settingsSection === 'tags' && (
+                  <div style={{ padding: '8px 10px' }}>
+                    <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 4 }}>AI reads these rules when generating tags for cards</div>
+                    <textarea value={activeMode.tagRules || ''}
+                      onChange={(e) => updateActiveMode({ tagRules: e.target.value })}
+                      style={{ ...S.keyInput, fontSize: 11, minHeight: 80, resize: 'vertical', width: '100%', boxSizing: 'border-box' }}
+                      placeholder="Instructions for AI tag generation..."
+                    />
+                  </div>
+                )}
+
+              </div>
+            )
+          })()}
         </div>
       )}
 
