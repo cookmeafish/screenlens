@@ -1,0 +1,22 @@
+{
+  "name": "Language Learning",
+  "type": "language",
+  "description": "",
+  "ankiDeck": "",
+  "fields": {
+    "pronunciation": true,
+    "translation": true,
+    "synonyms": true,
+    "definition": true,
+    "example": true
+  },
+  "frontTemplate": "{word} ({partOfSpeech})",
+  "backTemplate": "Pronunciación: {pronunciation}\nTraducción: {translation}\nSinónimos: {synonyms}\nDefinición: {definition}\nEjemplo: {example}",
+  "tagRules": "Always include:\n- part of speech (e.g. verb, noun, adjective)\n- source language (e.g. spanish, french)\n- \"screenlens\"\n\nAlso include when relevant:\n- verb tense (e.g. present, past, subjunctive)\n- difficulty (e.g. common, intermediate, advanced)\n- topic (e.g. food, emotion, travel, nature)",
+  "studyRules": {
+    "questionsPerCard": 3,
+    "cardsAtOnce": 3,
+    "questionPrompt": "You are quizzing a language learner on a flashcard.\n\nGenerate clear, specific questions that test whether the student truly knows this word/phrase. Mix question types:\n- Meaning and translation questions\n- Usage in context (give a scenario, ask them to fill in the word)\n- Synonyms, antonyms, or related words\n- Grammar questions (part of speech, conjugation, gender)\n\nRULES:\n- Questions must be precise and have ONE clear correct answer based on the card content\n- Never ask \"what is the primary purpose\" or \"what is the main reason\" — these are ambiguous\n- Never ask questions where multiple answers from the card could be valid\n- Each question must stand on its own — do not reference other questions\n- If the card has a list of points, ask about specific items, not \"what is the primary one\"",
+    "ratingRules": "All correct = Easy, 1 wrong = AI judges Good or Hard based on answer quality, 2 wrong = Hard, All wrong = Again"
+  }
+}

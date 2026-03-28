@@ -230,7 +230,7 @@ function apiPlugin() {
             // Read all mode folders
             const allDirs = fs.readdirSync(MODES_DIR).filter((d) => {
               const full = path.join(MODES_DIR, d)
-              return d !== '_meta.json' && fs.statSync(full).isDirectory() && fs.existsSync(path.join(full, 'config.json'))
+              return d !== '_meta.json' && d !== 'Default' && fs.statSync(full).isDirectory() && fs.existsSync(path.join(full, 'config.json'))
             })
             const modes = allDirs.map((d) => {
               try { return JSON.parse(fs.readFileSync(path.join(MODES_DIR, d, 'config.json'), 'utf-8')) } catch { return null }
@@ -254,7 +254,7 @@ function apiPlugin() {
                 // Remove folders for deleted/renamed modes
                 fs.readdirSync(MODES_DIR).forEach((d) => {
                   const full = path.join(MODES_DIR, d)
-                  if (fs.statSync(full).isDirectory() && !activeFolders.has(d)) {
+                  if (d !== 'Default' && fs.statSync(full).isDirectory() && !activeFolders.has(d)) {
                     fs.rmSync(full, { recursive: true, force: true })
                   }
                 })

@@ -1019,11 +1019,33 @@ Output ONLY raw JSON. No markdown, no backticks.`
   }
 
   const renameMode = (id, newName) => {
+    const trimmed = newName.trim()
+    if (!trimmed) { setEditingModeName(null); return }
+    // Check for name conflict
+    const conflict = modes.find((m) => m.id !== id && m.name.toLowerCase() === trimmed.toLowerCase())
+    if (conflict) {
+      alert(`A mode named "${trimmed}" already exists.`)
+      setEditingModeName(null)
+      return
+    }
     const updated = modes.map((m) =>
-      m.id === id ? { ...m, name: newName } : m
+      m.id === id ? { ...m, name: trimmed } : m
     )
     saveModes(updated)
     setEditingModeName(null)
+  }
+
+  const addDefaultMode = () => {
+    let name = 'Language Learning'
+    let suffix = 0
+    const existingNames = modes.map((m) => m.name.toLowerCase())
+    while (existingNames.includes(name.toLowerCase())) {
+      suffix++
+      name = `Language Learning-${suffix}`
+    }
+    const newId = Math.max(0, ...modes.map((m) => m.id)) + 1
+    const newMode = { ...defaultMode, id: newId, name }
+    saveModes([...modes, newMode], newId)
   }
 
   // ─── Deck Browser ──────────────────────────────────────────────────────
@@ -1873,8 +1895,12 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
             </button>
           </div>
 
-          {/* Done button */}
+          {/* Bottom buttons */}
           <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={addDefaultMode} style={{ ...S.ghostBtn, fontSize: 10, color: '#7ee787', borderColor: 'rgba(126,231,135,.25)' }}>
+              + Default Mode
+            </button>
+            <div style={{ flex: 1 }} />
             <button onClick={() => { setShowModePanel(false); setShowSettings(false); setSettingsSection(null) }} style={S.keyDone}>Done</button>
           </div>
         </div>

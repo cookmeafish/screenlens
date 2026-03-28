@@ -4,6 +4,8 @@ dist
 .env.local
 config.json
 ankiformat.json
-modes/
+modes/*
+!modes/Default/
+modes/_meta.json
 logs/
 .claude/
