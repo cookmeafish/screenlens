@@ -134,30 +134,12 @@ export default function App() {
   const [showAnkiSettings, setShowAnkiSettings] = useState(false)
   const defaultStudyRules = {
     questionsPerCard: 3,
-    questions: [
-      'What does "{front}" mean?',
-      'Use "{front}" in a sentence.',
-      'What part of speech is "{front}"?',
-      'Give a synonym for "{front}".',
-      'What is the opposite of "{front}"?',
-      'In what context would you use "{front}"?',
-      'Complete this sentence using "{front}": ___',
-      'What is the root or origin of "{front}"?',
-    ],
+    questionPrompt: 'You are quizzing a language learner on a flashcard.\n\nGenerate clear, specific questions that test whether the student truly knows this word/phrase. Mix question types:\n- Meaning and translation questions\n- Usage in context (give a scenario, ask them to fill in the word)\n- Synonyms, antonyms, or related words\n- Grammar questions (part of speech, conjugation, gender)\n\nQuestions should be direct and unambiguous. Avoid vague questions like "what is the root of this word" unless the etymology is on the card.',
     ratingRules: 'All correct = Easy, 1 wrong = AI judges Good or Hard based on answer quality, 2 wrong = Hard, All wrong = Again',
   }
   const defaultGeneralStudyRules = {
     questionsPerCard: 3,
-    questions: [
-      'Define "{front}" in your own words.',
-      'Give a real-world example of "{front}".',
-      'How does "{front}" relate to other concepts you\'ve studied?',
-      'Explain "{front}" as if teaching someone new to the subject.',
-      'What are the key characteristics of "{front}"?',
-      'Compare "{front}" with a similar concept.',
-      'Why is "{front}" important in this field?',
-      'Describe a scenario where knowledge of "{front}" is critical.',
-    ],
+    questionPrompt: 'You are quizzing a student on a flashcard for their studies.\n\nGenerate clear, specific questions that test understanding of this concept. Mix question types:\n- Definition and explanation questions\n- Real-world application or scenario questions\n- Compare/contrast with related concepts\n- Why it matters or when you would use it\n\nQuestions should be direct and answerable in 1-2 sentences. Base questions on what the card actually contains — don\'t ask about information not on the card.',
     ratingRules: 'All correct = Easy, 1 wrong = AI judges Good or Hard based on answer quality, 2 wrong = Hard, All wrong = Again',
   }
   const defaultMode = {
@@ -1096,22 +1078,39 @@ Output ONLY raw JSON. No markdown, no backticks.`
     }
   }
 
-  const pickQuestions = (card) => {
+  const pickQuestions = async (card) => {
     const rules = activeMode.studyRules || (activeMode.type === 'language' ? defaultStudyRules : defaultGeneralStudyRules)
-    const pool = rules.questions || []
-    const count = Math.min(rules.questionsPerCard || 3, pool.length)
-    // Pick random questions
-    const shuffled = [...pool].sort(() => Math.random() - 0.5)
+    const count = rules.questionsPerCard || 3
     const front = getCardFront(card)
     const back = getCardBack(card)
-    const picked = shuffled.slice(0, count).map((q) =>
-      q.replace(/\{front\}/g, front).replace(/\{back\}/g, back)
-    )
-    setStudyQuestions(picked)
+    const questionPrompt = rules.questionPrompt || defaultStudyRules.questionPrompt
+
     setStudyAnswers([])
     setStudyResults([])
     setStudyInput('')
-    setStudyPhase('question')
+    setStudyLoading(true)
+
+    try {
+      const prompt = `Card front: "${front}"
+Card back: "${back}"
+
+Generate exactly ${count} quiz questions for this flashcard.
+
+${questionPrompt}
+
+Return a JSON array of ${count} question strings. Output ONLY raw JSON. No markdown, no backticks.`
+
+      const text = await providerConfig.call(apiKey, 'You generate flashcard quiz questions. Always respond with a valid JSON array of strings.', prompt)
+      const questions = JSON.parse(text.trim().replace(/^```json?\s*/i, '').replace(/```\s*$/, ''))
+      console.log('[Study] AI generated questions:', questions)
+      setStudyQuestions(Array.isArray(questions) ? questions.slice(0, count) : [`What does "${front}" mean?`])
+    } catch (err) {
+      console.error('[Study] question generation failed:', err.message)
+      setStudyQuestions([`What does "${front}" mean?`, `Explain "${front}" in your own words.`, `Why is "${front}" important?`].slice(0, count))
+    } finally {
+      setStudyLoading(false)
+      setStudyPhase('question')
+    }
   }
 
   const stripHtml = (html) => {
@@ -1853,12 +1852,12 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                   <input type="number" min="1" max="10" value={activeMode.studyRules?.questionsPerCard || 3}
                     onChange={(e) => updateActiveMode({ studyRules: { ...(activeMode.studyRules || defaultStudyRules), questionsPerCard: parseInt(e.target.value) || 3 } })}
                     style={{ ...S.keyInput, fontSize: 11, width: 60 }} />
-                  <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 2 }}>Question pool (one per line, use {'{front}'} and {'{back}'} placeholders)</div>
+                  <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 2 }}>Question generation prompt (AI uses this to create questions per card)</div>
                   <textarea
-                    value={(activeMode.studyRules?.questions || (activeMode.type === 'language' ? defaultStudyRules : defaultGeneralStudyRules).questions).join('\n')}
-                    onChange={(e) => updateActiveMode({ studyRules: { ...(activeMode.studyRules || defaultStudyRules), questions: e.target.value.split('\n').filter((q) => q.trim()) } })}
+                    value={activeMode.studyRules?.questionPrompt || (activeMode.type === 'language' ? defaultStudyRules : defaultGeneralStudyRules).questionPrompt}
+                    onChange={(e) => updateActiveMode({ studyRules: { ...(activeMode.studyRules || defaultStudyRules), questionPrompt: e.target.value } })}
                     style={{ ...S.keyInput, fontSize: 11, minHeight: 100, resize: 'vertical', width: '100%', boxSizing: 'border-box' }}
-                    placeholder='What does "{front}" mean?' />
+                    placeholder='Describe what kinds of questions the AI should ask...' />
                   <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 2 }}>Rating rules</div>
                   <input value={activeMode.studyRules?.ratingRules || defaultStudyRules.ratingRules}
                     onChange={(e) => updateActiveMode({ studyRules: { ...(activeMode.studyRules || defaultStudyRules), ratingRules: e.target.value } })}
