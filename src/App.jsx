@@ -805,11 +805,17 @@ export default function App() {
     setExplaining(true)
     setExplanation(null)
     try {
-      const prompt = `Word: "${word.text}" (translated: "${word.translation}")
+      const prompt = activeMode.type === 'language'
+        ? `Word: "${word.text}" (translated: "${word.translation}")
 Context: "${getContext()}"
 
 In 1-2 short sentences: what does "${word.text}" mean here and what part of speech is it? No markdown.`
-      const text = await providerConfig.call(apiKey, 'You are a concise language tutor. Answer in 1-2 sentences max.', prompt)
+        : `Term: "${word.text}"
+Context: "${getContext()}"
+Study subject: ${activeMode.description || activeMode.name}
+
+In 1-2 short sentences: explain "${word.text}" in the context of ${activeMode.name}. No markdown.`
+      const text = await providerConfig.call(apiKey, activeMode.type === 'language' ? 'You are a concise language tutor. Answer in 1-2 sentences max.' : `You are a concise ${activeMode.name} tutor. Answer in 1-2 sentences max.`, prompt)
       setExplanation(text)
     } catch (err) {
       setExplanation('Failed: ' + err.message)
@@ -954,6 +960,42 @@ Output ONLY raw JSON. No markdown, no backticks.`
     )
     saveModes(updated)
     setEditingModeName(null)
+  }
+
+  // ─── AI Format Editing ───────────────────────────────────────────────────
+  const editModeWithAI = async (instruction) => {
+    if (!apiKey || modeCreating) return
+    setModeCreating(true)
+    try {
+      const prompt = `Current study mode config:
+${JSON.stringify({ name: activeMode.name, type: activeMode.type, fields: activeMode.fields, frontTemplate: activeMode.frontTemplate, backTemplate: activeMode.backTemplate, tagRules: activeMode.tagRules }, null, 2)}
+
+User's request: "${instruction}"
+
+Modify the config according to the user's request. Return the FULL updated JSON config with all fields (name, type, fields, frontTemplate, backTemplate, tagRules). Keep everything the user didn't ask to change.
+
+Output ONLY raw JSON. No markdown, no backticks.`
+
+      const text = await providerConfig.call(apiKey,
+        'You modify study mode configurations. Always respond with valid JSON only.',
+        prompt
+      )
+      const config = JSON.parse(text.trim().replace(/^```json?\s*/i, '').replace(/```\s*$/, ''))
+      updateActiveMode({
+        name: config.name || activeMode.name,
+        type: config.type || activeMode.type,
+        fields: config.fields || activeMode.fields,
+        frontTemplate: config.frontTemplate || activeMode.frontTemplate,
+        backTemplate: config.backTemplate || activeMode.backTemplate,
+        tagRules: config.tagRules || activeMode.tagRules,
+      })
+      console.log('[Mode] updated via AI:', config)
+    } catch (err) {
+      console.error('[Mode] AI edit failed:', err.message)
+      setAnkiError('Format edit failed: ' + err.message)
+    } finally {
+      setModeCreating(false)
+    }
   }
 
   // ─── AI Mode Creation ────────────────────────────────────────────────────
@@ -1510,6 +1552,25 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
       {showModeFormatEditor && showModePanel && (
         <div style={{ ...S.keyBar, flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: '#d2a8ff' }}>Edit Format: {activeMode.name}</div>
+
+          {/* AI edit input */}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input
+              value={modeEditInput}
+              onChange={(e) => setModeEditInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && modeEditInput.trim()) { editModeWithAI(modeEditInput.trim()); setModeEditInput('') } }}
+              placeholder="Tell AI what to change (e.g. 'add a mnemonic field', 'make tags include chapters')"
+              style={{ ...S.keyInput, flex: 1 }}
+              disabled={modeCreating}
+            />
+            <button
+              onClick={() => { if (modeEditInput.trim()) { editModeWithAI(modeEditInput.trim()); setModeEditInput('') } }}
+              disabled={modeCreating || !modeEditInput.trim()}
+              style={{ ...S.getKeyLink, opacity: modeCreating ? 0.5 : 1 }}
+            >
+              {modeCreating ? 'Updating...' : 'Update'}
+            </button>
+          </div>
 
           {/* Field toggles */}
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
