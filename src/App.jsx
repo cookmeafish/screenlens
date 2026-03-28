@@ -132,12 +132,41 @@ export default function App() {
   const [ankiError, setAnkiError] = useState(null)
   const [ankiGenerating, setAnkiGenerating] = useState(false)
   const [showAnkiSettings, setShowAnkiSettings] = useState(false)
+  const defaultStudyRules = {
+    questionsPerCard: 3,
+    questions: [
+      'What does "{front}" mean?',
+      'Use "{front}" in a sentence.',
+      'What part of speech is "{front}"?',
+      'Give a synonym for "{front}".',
+      'What is the opposite of "{front}"?',
+      'In what context would you use "{front}"?',
+      'Complete this sentence using "{front}": ___',
+      'What is the root or origin of "{front}"?',
+    ],
+    ratingRules: 'All correct = Easy, 1 wrong = AI judges Good or Hard based on answer quality, 2 wrong = Hard, All wrong = Again',
+  }
+  const defaultGeneralStudyRules = {
+    questionsPerCard: 3,
+    questions: [
+      'Define "{front}" in your own words.',
+      'Give a real-world example of "{front}".',
+      'How does "{front}" relate to other concepts you\'ve studied?',
+      'Explain "{front}" as if teaching someone new to the subject.',
+      'What are the key characteristics of "{front}"?',
+      'Compare "{front}" with a similar concept.',
+      'Why is "{front}" important in this field?',
+      'Describe a scenario where knowledge of "{front}" is critical.',
+    ],
+    ratingRules: 'All correct = Easy, 1 wrong = AI judges Good or Hard based on answer quality, 2 wrong = Hard, All wrong = Again',
+  }
   const defaultMode = {
     id: 1, name: 'Language Learning', type: 'language', description: '',
     fields: { pronunciation: true, translation: true, synonyms: true, definition: true, example: true },
     frontTemplate: '{word} ({partOfSpeech})',
     backTemplate: 'Pronunciación: {pronunciation}\nTraducción: {translation}\nSinónimos: {synonyms}\nDefinición: {definition}\nEjemplo: {example}',
     tagRules: 'Always include:\n- part of speech (e.g. verb, noun, adjective)\n- source language (e.g. spanish, french)\n- "screenlens"\n\nAlso include when relevant:\n- verb tense (e.g. present, past, subjunctive)\n- difficulty (e.g. common, intermediate, advanced)\n- topic (e.g. food, emotion, travel, nature)',
+    studyRules: defaultStudyRules,
   }
   const [modes, setModes] = useState([defaultMode])
   const [activeModeId, setActiveModeId] = useState(1)
@@ -1047,6 +1076,7 @@ Output ONLY raw JSON. No markdown, no backticks.`
         frontTemplate: config.frontTemplate || '{term}',
         backTemplate: config.backTemplate || 'Definition: {definition}',
         tagRules: config.tagRules || 'Include: screenlens',
+        studyRules: (config.type || 'general') === 'language' ? defaultStudyRules : defaultGeneralStudyRules,
       }
       saveModes([...modes, newMode], newId)
       console.log('[Mode] created:', newMode)
@@ -1536,115 +1566,153 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
           </div>
 
           {/* Settings — shown when gear is clicked */}
-          {showSettings && (() => {
-            const sectionBtn = (key, label, color, bg) => (
+          {showSettings && (
+            <div style={{ borderTop: '1px solid #2a3040', paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#58a6ff' }}>Anki</div>
+
+              {/* Connection & Deck — always visible when settings open */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: ankiConnected ? '#7ee787' : ankiConnected === false ? '#d29922' : '#7d8590', flexShrink: 0 }} />
+                <span style={{ fontSize: 11, color: '#7d8590' }}>
+                  {ankiConnected ? 'Connected' : ankiConnected === false ? 'Not connected' : 'Checking...'}
+                </span>
+                {ankiConnected && ankiDecks.length > 0 && (
+                  <>
+                    <span style={{ fontSize: 11, color: '#7d8590' }}>Deck:</span>
+                    <select value={ankiDeck} onChange={(e) => setAnkiDeck(e.target.value)} style={{ ...S.select, minWidth: 120 }}>
+                      {ankiDecks.map((d) => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                  </>
+                )}
+                <button onClick={refreshAnkiConnection} style={{ ...S.getKeyLink, fontSize: 10 }}>
+                  {ankiConnected === null ? 'Checking...' : 'Refresh'}
+                </button>
+              </div>
+
+              {/* Card Format — collapsible sub-section */}
               <button
-                onClick={() => setSettingsSection(settingsSection === key ? null : key)}
+                onClick={() => setSettingsSection(settingsSection === 'format' ? null : 'format')}
                 style={{
                   width: '100%', textAlign: 'left', padding: '6px 10px', borderRadius: 5,
                   fontSize: 11, fontFamily: 'inherit', cursor: 'pointer',
-                  background: settingsSection === key ? `${bg}.15)` : `${bg}.06)`,
-                  color, border: `1px solid ${bg}.2)`, fontWeight: 600,
+                  background: settingsSection === 'format' ? 'rgba(210,168,255,.15)' : 'rgba(210,168,255,.06)',
+                  color: '#d2a8ff', border: '1px solid rgba(210,168,255,.2)', fontWeight: 600,
                 }}
               >
-                {settingsSection === key ? '\u25BC' : '\u25B6'} {label}
+                {settingsSection === 'format' ? '\u25BC' : '\u25B6'} Card Format
               </button>
-            )
-            return (
-              <div style={{ borderTop: '1px solid #2a3040', paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
-
-                {/* Anki Connection section */}
-                {sectionBtn('anki', `Anki ${ankiConnected ? '(connected)' : ankiConnected === false ? '(offline)' : ''}`, '#58a6ff', 'rgba(88,166,255,')}
-                {settingsSection === 'anki' && (
-                  <div style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: ankiConnected ? '#7ee787' : ankiConnected === false ? '#d29922' : '#7d8590', flexShrink: 0 }} />
-                      <span style={{ fontSize: 11, color: '#7d8590' }}>
-                        {ankiConnected ? 'Connected' : ankiConnected === false ? 'Not connected' : 'Checking...'}
-                      </span>
-                      {ankiConnected && ankiDecks.length > 0 && (
-                        <>
-                          <span style={{ fontSize: 11, color: '#7d8590' }}>Deck:</span>
-                          <select value={ankiDeck} onChange={(e) => setAnkiDeck(e.target.value)} style={{ ...S.select, minWidth: 120 }}>
-                            {ankiDecks.map((d) => <option key={d} value={d}>{d}</option>)}
-                          </select>
-                        </>
-                      )}
-                      <button onClick={refreshAnkiConnection} style={{ ...S.getKeyLink, fontSize: 10 }}>
-                        {ankiConnected === null ? 'Checking...' : 'Refresh'}
-                      </button>
-                    </div>
-                    <div style={{ fontSize: 10, color: '#484f58' }}>Requires AnkiConnect addon (code: 2055492159)</div>
+              {settingsSection === 'format' && (
+                <div style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 8, borderLeft: '2px solid rgba(210,168,255,.2)', marginLeft: 4 }}>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <input
+                      value={modeEditInput}
+                      onChange={(e) => setModeEditInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && modeEditInput.trim()) { editModeWithAI(modeEditInput.trim()); setModeEditInput('') } }}
+                      placeholder="Ask AI to change format (e.g. 'add a mnemonic field')"
+                      style={{ ...S.keyInput, flex: 1, fontSize: 11 }}
+                      disabled={modeCreating}
+                    />
+                    <button
+                      onClick={() => { if (modeEditInput.trim()) { editModeWithAI(modeEditInput.trim()); setModeEditInput('') } }}
+                      disabled={modeCreating || !modeEditInput.trim()}
+                      style={{ ...S.getKeyLink, opacity: modeCreating ? 0.5 : 1, fontSize: 10 }}
+                    >
+                      {modeCreating ? '...' : 'AI Edit'}
+                    </button>
                   </div>
-                )}
-
-                {/* Card Format section */}
-                {sectionBtn('format', 'Card Format', '#d2a8ff', 'rgba(210,168,255,')}
-                {settingsSection === 'format' && (
-                  <div style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <input
-                        value={modeEditInput}
-                        onChange={(e) => setModeEditInput(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === 'Enter' && modeEditInput.trim()) { editModeWithAI(modeEditInput.trim()); setModeEditInput('') } }}
-                        placeholder="Ask AI to change format (e.g. 'add a mnemonic field')"
-                        style={{ ...S.keyInput, flex: 1, fontSize: 11 }}
-                        disabled={modeCreating}
-                      />
-                      <button
-                        onClick={() => { if (modeEditInput.trim()) { editModeWithAI(modeEditInput.trim()); setModeEditInput('') } }}
-                        disabled={modeCreating || !modeEditInput.trim()}
-                        style={{ ...S.getKeyLink, opacity: modeCreating ? 0.5 : 1, fontSize: 10 }}
-                      >
-                        {modeCreating ? '...' : 'AI Edit'}
-                      </button>
-                    </div>
-                    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                      {Object.entries(ankiFormat.fields).map(([field, enabled]) => (
-                        <label key={field} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: enabled ? '#e6edf3' : '#7d8590', cursor: 'pointer' }}>
-                          <input type="checkbox" checked={enabled}
-                            onChange={() => updateActiveMode({ fields: { ...ankiFormat.fields, [field]: !enabled } })}
-                          />
-                          {field}
-                        </label>
-                      ))}
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 4 }}>Front template</div>
-                      <input value={ankiFormat.frontTemplate}
-                        onChange={(e) => updateActiveMode({ frontTemplate: e.target.value })}
-                        style={{ ...S.keyInput, fontSize: 11 }}
-                      />
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 4 }}>Back template</div>
-                      <textarea value={ankiFormat.backTemplate}
-                        onChange={(e) => updateActiveMode({ backTemplate: e.target.value })}
-                        style={{ ...S.keyInput, fontSize: 11, minHeight: 70, resize: 'vertical' }}
-                      />
-                    </div>
-                    <div style={{ fontSize: 10, color: '#484f58' }}>
-                      Placeholders: {'{word}'} {'{term}'} {'{partOfSpeech}'} {'{pronunciation}'} {'{translation}'} {'{synonyms}'} {'{definition}'} {'{example}'}
-                    </div>
+                  <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                    {Object.entries(ankiFormat.fields).map(([field, enabled]) => (
+                      <label key={field} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: enabled ? '#e6edf3' : '#7d8590', cursor: 'pointer' }}>
+                        <input type="checkbox" checked={enabled}
+                          onChange={() => updateActiveMode({ fields: { ...ankiFormat.fields, [field]: !enabled } })}
+                        />
+                        {field}
+                      </label>
+                    ))}
                   </div>
-                )}
-
-                {/* Tag Rules section */}
-                {sectionBtn('tags', 'Tag Rules', '#7ee787', 'rgba(126,231,135,')}
-                {settingsSection === 'tags' && (
-                  <div style={{ padding: '8px 10px' }}>
-                    <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 4 }}>AI reads these rules when generating tags for cards</div>
-                    <textarea value={activeMode.tagRules || ''}
-                      onChange={(e) => updateActiveMode({ tagRules: e.target.value })}
-                      style={{ ...S.keyInput, fontSize: 11, minHeight: 80, resize: 'vertical', width: '100%', boxSizing: 'border-box' }}
-                      placeholder="Instructions for AI tag generation..."
+                  <div>
+                    <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 4 }}>Front template</div>
+                    <input value={ankiFormat.frontTemplate}
+                      onChange={(e) => updateActiveMode({ frontTemplate: e.target.value })}
+                      style={{ ...S.keyInput, fontSize: 11 }}
                     />
                   </div>
-                )}
+                  <div>
+                    <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 4 }}>Back template</div>
+                    <textarea value={ankiFormat.backTemplate}
+                      onChange={(e) => updateActiveMode({ backTemplate: e.target.value })}
+                      style={{ ...S.keyInput, fontSize: 11, minHeight: 70, resize: 'vertical' }}
+                    />
+                  </div>
+                  <div style={{ fontSize: 10, color: '#484f58' }}>
+                    Placeholders: {'{word}'} {'{term}'} {'{partOfSpeech}'} {'{pronunciation}'} {'{translation}'} {'{synonyms}'} {'{definition}'} {'{example}'}
+                  </div>
+                </div>
+              )}
 
-              </div>
-            )
-          })()}
+              {/* Tag Rules — collapsible sub-section */}
+              <button
+                onClick={() => setSettingsSection(settingsSection === 'tags' ? null : 'tags')}
+                style={{
+                  width: '100%', textAlign: 'left', padding: '6px 10px', borderRadius: 5,
+                  fontSize: 11, fontFamily: 'inherit', cursor: 'pointer',
+                  background: settingsSection === 'tags' ? 'rgba(126,231,135,.15)' : 'rgba(126,231,135,.06)',
+                  color: '#7ee787', border: '1px solid rgba(126,231,135,.2)', fontWeight: 600,
+                }}
+              >
+                {settingsSection === 'tags' ? '\u25BC' : '\u25B6'} Tag Rules
+              </button>
+              {settingsSection === 'tags' && (
+                <div style={{ padding: '8px 10px', borderLeft: '2px solid rgba(126,231,135,.2)', marginLeft: 4 }}>
+                  <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 4 }}>AI reads these rules when generating tags for cards</div>
+                  <textarea value={activeMode.tagRules || ''}
+                    onChange={(e) => updateActiveMode({ tagRules: e.target.value })}
+                    style={{ ...S.keyInput, fontSize: 11, minHeight: 80, resize: 'vertical', width: '100%', boxSizing: 'border-box' }}
+                    placeholder="Instructions for AI tag generation..."
+                  />
+                </div>
+              )}
+
+              {/* Study Rules — collapsible sub-section */}
+              <button
+                onClick={() => setSettingsSection(settingsSection === 'study' ? null : 'study')}
+                style={{
+                  width: '100%', textAlign: 'left', padding: '6px 10px', borderRadius: 5,
+                  fontSize: 11, fontFamily: 'inherit', cursor: 'pointer',
+                  background: settingsSection === 'study' ? 'rgba(255,166,87,.15)' : 'rgba(255,166,87,.06)',
+                  color: '#ffa657', border: '1px solid rgba(255,166,87,.2)', fontWeight: 600,
+                }}
+              >
+                {settingsSection === 'study' ? '\u25BC' : '\u25B6'} Study Rules
+              </button>
+              {settingsSection === 'study' && (
+                <div style={{ padding: '8px 10px', borderLeft: '2px solid rgba(255,166,87,.2)', marginLeft: 4, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 2 }}>Questions per card</div>
+                  <input
+                    type="number" min="1" max="10"
+                    value={activeMode.studyRules?.questionsPerCard || 3}
+                    onChange={(e) => updateActiveMode({ studyRules: { ...(activeMode.studyRules || defaultStudyRules), questionsPerCard: parseInt(e.target.value) || 3 } })}
+                    style={{ ...S.keyInput, fontSize: 11, width: 60 }}
+                  />
+                  <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 2 }}>Question pool (one per line, use {'{front}'} and {'{back}'} placeholders)</div>
+                  <textarea
+                    value={(activeMode.studyRules?.questions || (activeMode.type === 'language' ? defaultStudyRules : defaultGeneralStudyRules).questions).join('\n')}
+                    onChange={(e) => updateActiveMode({ studyRules: { ...(activeMode.studyRules || defaultStudyRules), questions: e.target.value.split('\n').filter((q) => q.trim()) } })}
+                    style={{ ...S.keyInput, fontSize: 11, minHeight: 100, resize: 'vertical', width: '100%', boxSizing: 'border-box' }}
+                    placeholder='What does "{front}" mean?'
+                  />
+                  <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 2 }}>Rating rules</div>
+                  <input
+                    value={activeMode.studyRules?.ratingRules || defaultStudyRules.ratingRules}
+                    onChange={(e) => updateActiveMode({ studyRules: { ...(activeMode.studyRules || defaultStudyRules), ratingRules: e.target.value } })}
+                    style={{ ...S.keyInput, fontSize: 11 }}
+                  />
+                </div>
+              )}
+
+              <div style={{ fontSize: 10, color: '#484f58' }}>Requires AnkiConnect addon (code: 2055492159)</div>
+            </div>
+          )}
         </div>
       )}
 
