@@ -1711,8 +1711,10 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                   />
                 ) : (
                   <button
-                    onClick={() => { setActiveModeId(m.id); saveModes(modes, m.id) }}
-                    onDoubleClick={() => setEditingModeName(m.id)}
+                    onClick={() => {
+                      if (m.id === activeModeId) { setEditingModeName(m.id) }
+                      else { setActiveModeId(m.id); saveModes(modes, m.id) }
+                    }}
                     title={`${m.description || m.name}\nDouble-click to rename`}
                     style={{
                       padding: '4px 10px', borderRadius: 5, fontSize: 11, fontFamily: 'inherit', cursor: 'pointer',
