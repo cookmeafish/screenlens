@@ -1936,20 +1936,22 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
       {/* Settings panel — independent of mode panel */}
       {showSettings && (
         <div style={{ ...S.keyBar, flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
-          <div style={{ fontSize: 11, color: '#7d8590' }}>
-            Settings for: {editingModeName === activeModeId ? (
+          <div style={{ fontSize: 11, color: '#7d8590', display: 'flex', alignItems: 'center', gap: 8 }}>
+            Settings for:
+            <select value={activeModeId} onChange={(e) => { const id = parseInt(e.target.value); setActiveModeId(id); saveModes(modes, id) }}
+              style={{ ...S.select, fontSize: 11, padding: '3px 8px', color: '#58a6ff', borderColor: 'rgba(88,166,255,.3)', background: 'rgba(88,166,255,.08)' }}>
+              {modes.map((m) => <option key={m.id} value={m.id}>{m.type === 'language' ? '\u{1F310}' : '\u{1F4DA}'} {m.name}</option>)}
+            </select>
+            {editingModeName === activeModeId ? (
               <input autoFocus defaultValue={activeMode.name}
                 onBlur={(e) => renameMode(activeModeId, e.target.value || activeMode.name)}
                 onKeyDown={(e) => { if (e.key === 'Enter') renameMode(activeModeId, e.target.value || activeMode.name) }}
-                style={{ ...S.keyInput, width: 150, fontSize: 11, padding: '2px 6px', display: 'inline' }}
+                style={{ ...S.keyInput, width: 120, fontSize: 11, padding: '2px 6px' }}
               />
             ) : (
-              <strong onClick={() => setEditingModeName(activeModeId)} style={{
-                color: '#58a6ff', cursor: 'pointer', padding: '3px 8px', borderRadius: 4,
-                border: '1px solid rgba(88,166,255,.3)', background: 'rgba(88,166,255,.08)',
-              }} title="Click to rename">
-                {activeMode.type === 'language' ? '\u{1F310}' : '\u{1F4DA}'} {activeMode.name}
-              </strong>
+              <span onClick={() => setEditingModeName(activeModeId)} style={{ cursor: 'pointer', color: '#484f58', fontSize: 10 }} title="Click to rename">
+                rename
+              </span>
             )}
           </div>
           {/* Anki — top-level collapsible */}
