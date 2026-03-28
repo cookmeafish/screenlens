@@ -123,6 +123,7 @@ export default function App() {
   const [showHighlights, setShowHighlights] = useState(true)
   const [language, setLanguage] = useState('auto')
   const [targetLang, setTargetLang] = useState('eng')
+  const [overlayRunning, setOverlayRunning] = useState(false)
   const [ankiConnected, setAnkiConnected] = useState(null)
   const [ankiDecks, setAnkiDecks] = useState([])
   const [ankiCard, setAnkiCard] = useState(null)
@@ -259,6 +260,11 @@ export default function App() {
       setKeysLoaded(true)
       setConfigLoaded(true)
     })
+    // Poll overlay status
+    const overlayPoll = setInterval(() => {
+      fetch('/api/launch-overlay').then(r => r.json()).then(d => setOverlayRunning(d.running)).catch(() => {})
+    }, 3000)
+
     // Check AnkiConnect on mount
     console.log('[Anki] checking connection on mount...')
     ankiPing().then((ok) => {
@@ -1913,20 +1919,22 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
             console.log('[Overlay] launching...')
             try {
               const r = await fetch('/api/launch-overlay', { method: 'POST' })
-              console.log('[Overlay] response status:', r.status)
-              const text = await r.text()
-              console.log('[Overlay] response body:', text)
-              try {
-                const d = JSON.parse(text)
-                if (d.error) { alert(d.error) }
-                else { alert(`Overlay ${d.status}! Press Ctrl+Shift+S in any app to capture.`) }
-              } catch { alert('Unexpected response: ' + text.substring(0, 200)) }
+              const d = await r.json()
+              if (d.error) { alert(d.error) }
+              else {
+                setOverlayRunning(true)
+                console.log('[Overlay]', d.status)
+              }
             } catch (err) {
-              console.error('[Overlay] fetch failed:', err)
               alert('Failed to launch overlay: ' + err.message)
             }
-          }} style={{ ...S.ghostBtn, color: '#d2a8ff', borderColor: 'rgba(210,168,255,0.25)' }}>
-            Overlay
+          }} style={{
+            ...S.ghostBtn,
+            color: overlayRunning ? '#7ee787' : '#7d8590',
+            borderColor: overlayRunning ? 'rgba(126,231,135,0.3)' : '#2a3040',
+            background: overlayRunning ? 'rgba(126,231,135,0.08)' : 'transparent',
+          }}>
+            {overlayRunning ? '\u25CF' : '\u25CB'} Overlay
           </button>
 
           <kbd style={S.kbd}>Ctrl+Shift+S</kbd>

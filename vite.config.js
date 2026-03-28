@@ -389,6 +389,9 @@ function apiPlugin() {
             console.error('[Overlay] Launch failed:', e.message)
             res.end(JSON.stringify({ error: 'Failed to launch: ' + e.message }))
           }
+        } else if (req.method === 'GET') {
+          res.setHeader('Content-Type', 'application/json')
+          res.end(JSON.stringify({ running: !!(overlayProcess && !overlayProcess.killed) }))
         } else { res.statusCode = 405; res.end('') }
       })
 
