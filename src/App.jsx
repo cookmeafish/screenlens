@@ -184,7 +184,8 @@ export default function App() {
   const [studyQuestions, setStudyQuestions] = useState([])
   const [studyAnswers, setStudyAnswers] = useState([])
   const [studyResults, setStudyResults] = useState([])
-  const [studyPhase, setStudyPhase] = useState('question') // 'question' | 'feedback' | 'summary'
+  const [studyPhase, setStudyPhase] = useState('pick') // 'pick' | 'question' | 'feedback' | 'summary'
+  const [studyDeck, setStudyDeck] = useState('')
   const [studyInput, setStudyInput] = useState('')
   const [studyLoading, setStudyLoading] = useState(false)
   const [studyStats, setStudyStats] = useState({ easy: 0, good: 0, hard: 0, again: 0 })
@@ -1057,20 +1058,34 @@ Output ONLY raw JSON. No markdown, no backticks.`
   // ─── Study Session ──────────────────────────────────────────────────────
   const startStudySession = async () => {
     if (!ankiConnected) { setAnkiError('Anki is not connected'); return }
+    // Refresh deck list and show picker
+    const decks = await ankiGetDecks().catch(() => [])
+    setAnkiDecks(decks)
+    setStudyDeck(ankiDeck || decks[0] || '')
+    setStudyActive(true)
+    setStudyPhase('pick')
+  }
+
+  const beginStudy = async (deck) => {
     setStudyLoading(true)
     try {
-      const cardIds = await ankiFindCards(`deck:"${ankiDeck}" is:due`)
+      // Try due cards first, fall back to all cards
+      let cardIds = await ankiFindCards(`deck:"${deck}" is:due`)
       if (!cardIds || cardIds.length === 0) {
-        setAnkiError('No cards due for review in this deck')
+        cardIds = await ankiFindCards(`deck:"${deck}"`)
+      }
+      if (!cardIds || cardIds.length === 0) {
+        setAnkiError('No cards found in this deck')
         setStudyLoading(false)
         return
       }
-      const cards = await ankiCardsInfo(cardIds.slice(0, 50)) // limit to 50
-      console.log('[Study] loaded', cards.length, 'cards')
+      // Shuffle and limit
+      const shuffled = [...cardIds].sort(() => Math.random() - 0.5)
+      const cards = await ankiCardsInfo(shuffled.slice(0, 50))
+      console.log('[Study] loaded', cards.length, 'cards from deck:', deck)
       setStudyCards(cards)
       setStudyIdx(0)
       setStudyStats({ easy: 0, good: 0, hard: 0, again: 0 })
-      setStudyActive(true)
       setStudyPhase('question')
       pickQuestions(cards[0])
     } catch (err) {
@@ -1087,8 +1102,8 @@ Output ONLY raw JSON. No markdown, no backticks.`
     const count = Math.min(rules.questionsPerCard || 3, pool.length)
     // Pick random questions
     const shuffled = [...pool].sort(() => Math.random() - 0.5)
-    const front = stripHtml(card.fields?.Front?.value || '')
-    const back = stripHtml(card.fields?.Back?.value || '')
+    const front = getCardFront(card)
+    const back = getCardBack(card)
     const picked = shuffled.slice(0, count).map((q) =>
       q.replace(/\{front\}/g, front).replace(/\{back\}/g, back)
     )
@@ -1102,7 +1117,21 @@ Output ONLY raw JSON. No markdown, no backticks.`
   const stripHtml = (html) => {
     const tmp = document.createElement('div')
     tmp.innerHTML = html
-    return tmp.textContent || tmp.innerText || ''
+    return (tmp.textContent || tmp.innerText || '').trim()
+  }
+
+  const getCardFront = (card) => {
+    // Use first field value, or fall back to question HTML
+    const fields = card.fields ? Object.values(card.fields) : []
+    const firstField = fields.sort((a, b) => a.order - b.order)[0]
+    return stripHtml(firstField?.value || card.question || '')
+  }
+
+  const getCardBack = (card) => {
+    // Use second field value, or fall back to answer HTML
+    const fields = card.fields ? Object.values(card.fields) : []
+    const sorted = fields.sort((a, b) => a.order - b.order)
+    return stripHtml(sorted[1]?.value || card.answer || '')
   }
 
   const submitStudyAnswer = async () => {
@@ -1111,8 +1140,8 @@ Output ONLY raw JSON. No markdown, no backticks.`
     const qIdx = studyAnswers.length
     const question = studyQuestions[qIdx]
     const card = studyCards[studyIdx]
-    const front = stripHtml(card.fields?.Front?.value || '')
-    const back = stripHtml(card.fields?.Back?.value || '')
+    const front = getCardFront(card)
+    const back = getCardBack(card)
 
     setStudyLoading(true)
     setStudyInput('')
@@ -1181,8 +1210,9 @@ Respond with JSON: {"correct": true/false, "feedback": "brief explanation"}`
     setStudyQuestions([])
     setStudyAnswers([])
     setStudyResults([])
-    setStudyPhase('question')
+    setStudyPhase('pick')
     setStudyInput('')
+    setAnkiError(null)
   }
 
   // ─── AI Mode Creation ────────────────────────────────────────────────────
@@ -1846,6 +1876,39 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
       {studyActive && (
         <main style={{ ...S.main, justifyContent: 'center', alignItems: 'center' }}>
           <div style={{ maxWidth: 600, width: '100%', padding: '40px 20px' }}>
+
+            {/* Deck picker phase */}
+            {studyPhase === 'pick' && (
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: 20, fontWeight: 700, color: '#e6edf3', marginBottom: 8 }}>Study Session</div>
+                <div style={{ fontSize: 12, color: '#7d8590', marginBottom: 20 }}>Select a deck to study from</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center', marginBottom: 20 }}>
+                  {ankiDecks.map((d) => (
+                    <button key={d}
+                      onClick={() => setStudyDeck(d)}
+                      style={{
+                        width: 300, padding: '10px 16px', borderRadius: 6, fontSize: 13,
+                        fontFamily: 'inherit', cursor: 'pointer', textAlign: 'left',
+                        background: studyDeck === d ? 'rgba(88,166,255,.15)' : 'rgba(125,133,144,.06)',
+                        color: studyDeck === d ? '#58a6ff' : '#c9d1d9',
+                        border: studyDeck === d ? '1px solid rgba(88,166,255,.4)' : '1px solid #2a3040',
+                        fontWeight: studyDeck === d ? 700 : 400,
+                      }}
+                    >
+                      {d}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+                  <button onClick={() => beginStudy(studyDeck)} disabled={!studyDeck || studyLoading}
+                    style={{ ...S.captureBtn, borderRadius: 6, opacity: !studyDeck || studyLoading ? 0.5 : 1 }}>
+                    {studyLoading ? 'Loading cards...' : 'Start Studying'}
+                  </button>
+                  <button onClick={exitStudy} style={{ ...S.ghostBtn }}>Cancel</button>
+                </div>
+                {ankiError && <div style={{ color: '#f85149', fontSize: 11, marginTop: 8 }}>{ankiError}</div>}
+              </div>
+            )}
 
             {/* Summary phase */}
             {studyPhase === 'summary' && (
