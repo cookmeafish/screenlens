@@ -186,11 +186,14 @@ function renderWords(words) {
     box.className = 'word-box'
     box.style.left = x0 + 'px'
     box.style.top = y0 + 'px'
-    box.style.width = w + 'px'
-    box.style.height = h + 'px'
+    box.style.width = Math.max(w, 30) + 'px'
+    box.style.height = Math.max(h, 16) + 'px'
 
-    // Store word data on element
-    box._word = word
+    // Add visible text label
+    const label = document.createElement('div')
+    label.className = 'word-label'
+    label.textContent = word.translation || word.text
+    box.appendChild(label)
 
     box.addEventListener('mouseenter', () => showTooltip(word, box))
     box.addEventListener('mouseleave', () => hideTooltip())

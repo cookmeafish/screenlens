@@ -13,15 +13,25 @@
 
     .word-box {
       position: absolute;
-      background: rgba(88,166,255,0.25);
-      border: 2px solid rgba(88,166,255,0.6);
+      background: rgba(0,0,0,0.55);
+      border: 2px solid #58a6ff;
       border-radius: 3px;
       cursor: pointer;
-      transition: background 0.15s;
+      transition: background 0.15s, border-color 0.15s;
     }
     .word-box:hover {
-      background: rgba(88,166,255,0.5);
-      border-color: rgba(88,166,255,0.9);
+      background: rgba(0,0,0,0.8);
+      border-color: #7ee787;
+    }
+    .word-label {
+      color: #58a6ff;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 1px 3px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      line-height: 1;
     }
 
     .tooltip {
