@@ -72,6 +72,11 @@ export async function ankiAnswerCards(answers) {
   return ankiRequest('answerCards', { answers })
 }
 
+export async function ankiGetDeckStats(decks) {
+  ankiLog(`getting deck stats for: ${decks.join(', ')}`)
+  return ankiRequest('getDeckStats', { decks })
+}
+
 export async function ankiSync() {
   ankiLog('triggering sync to AnkiWeb...')
   await ankiRequest('sync')

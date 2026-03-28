@@ -6,7 +6,7 @@ import { LANGS } from './config/languages'
 import FormattedText from './components/FormattedText'
 import { S } from './styles/theme'
 import { ocrLog, ocrLogTable, ocrLogFlush } from './utils/logger'
-import { ankiPing, ankiGetDecks, ankiCreateDeck, ankiAddNote, ankiFindCards, ankiCardsInfo, ankiAnswerCards, ankiSync } from './utils/anki'
+import { ankiPing, ankiGetDecks, ankiCreateDeck, ankiAddNote, ankiFindCards, ankiCardsInfo, ankiAnswerCards, ankiGetDeckStats, ankiSync } from './utils/anki'
 
 
 // ─── Image Preprocessing for OCR ────────────────────────────────────────────
@@ -175,6 +175,7 @@ export default function App() {
   const [studyInput, setStudyInput] = useState('')
   const [studyLoading, setStudyLoading] = useState(false)
   const [studyStats, setStudyStats] = useState({ easy: 0, good: 0, hard: 0, again: 0 })
+  const [studyDeckStats, setStudyDeckStats] = useState({ new_count: 0, learn_count: 0, review_count: 0 })
 
   const activeMode = modes.find((m) => m.id === activeModeId) || modes[0] || defaultMode
   const ankiFormat = activeMode
@@ -1079,6 +1080,11 @@ Output ONLY raw JSON. No markdown, no backticks.`
       if (!cardIds || cardIds.length === 0) cardIds = await ankiFindCards(`deck:"${deck}"`)
       if (!cardIds || cardIds.length === 0) { setAnkiError('No cards found in this deck'); setStudyLoading(false); return }
 
+      // Fetch live deck stats
+      const stats = await ankiGetDeckStats([deck]).catch(() => ({}))
+      const deckStat = Object.values(stats)[0] || { new_count: 0, learn_count: 0, review_count: 0 }
+      setStudyDeckStats(deckStat)
+
       const shuffled = [...cardIds].sort(() => Math.random() - 0.5)
       const cards = await ankiCardsInfo(shuffled.slice(0, 50))
       console.log('[Study] loaded', cards.length, 'cards from deck:', deck)
@@ -1180,6 +1186,11 @@ Output ONLY raw JSON. No markdown, no backticks.`
         newStates[current.cardIdx].rating = label
         try { await ankiAnswerCards([{ cardId: cs.cardId, ease }]) } catch {}
         ankiSync().catch((err) => console.warn('[Anki] AnkiWeb sync failed:', err.message))
+        // Refresh deck stats live
+        ankiGetDeckStats([studyDeck]).then((s) => {
+          const ds = Object.values(s)[0]
+          if (ds) setStudyDeckStats(ds)
+        }).catch(() => {})
         setStudyStats((prev) => ({ ...prev, [label]: prev[label] + 1 }))
         console.log('[Study] card done:', cs.front, '→', label)
       }
@@ -1966,30 +1977,16 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
               const current = studyQueue[studyQueueIdx]
               const cs = studyCardState[current.cardIdx]
               const question = cs.questions[current.questionIdx]
-              const totalQ = studyQueue.length
-              const ratingColors = { easy: '#7ee787', good: '#58a6ff', hard: '#d29922', again: '#f85149' }
               return (
                 <div>
+                  {/* Header with Anki-style counts */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                    <span style={{ fontSize: 12, color: '#7d8590' }}>
-                      Question {studyQueueIdx + 1}/{totalQ} — {studyCardState.length} cards in batch
-                    </span>
+                    <div style={{ display: 'flex', gap: 12, fontSize: 12 }}>
+                      <span style={{ color: '#58a6ff' }}>{studyDeckStats.new_count || 0} <span style={{ fontSize: 10, color: '#7d8590' }}>New</span></span>
+                      <span style={{ color: '#f85149' }}>{studyDeckStats.learn_count || 0} <span style={{ fontSize: 10, color: '#7d8590' }}>Learn</span></span>
+                      <span style={{ color: '#7ee787' }}>{studyDeckStats.review_count || 0} <span style={{ fontSize: 10, color: '#7d8590' }}>Due</span></span>
+                    </div>
                     <button onClick={exitStudy} style={{ ...S.ghostBtn, fontSize: 10 }}>Exit Study</button>
-                  </div>
-
-                  {/* Card indicator chips */}
-                  <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
-                    {studyCardState.map((c, i) => (
-                      <span key={i} style={{
-                        fontSize: 10, padding: '3px 8px', borderRadius: 4,
-                        background: i === current.cardIdx ? 'rgba(88,166,255,.2)' : c.done ? `${ratingColors[c.rating]}22` : 'rgba(125,133,144,.1)',
-                        color: i === current.cardIdx ? '#58a6ff' : c.done ? ratingColors[c.rating] : '#7d8590',
-                        border: `1px solid ${i === current.cardIdx ? 'rgba(88,166,255,.4)' : c.done ? `${ratingColors[c.rating]}44` : '#2a3040'}`,
-                        fontWeight: i === current.cardIdx ? 700 : 400,
-                      }}>
-                        {c.front.slice(0, 20)}{c.front.length > 20 ? '...' : ''} {c.done ? `(${c.rating})` : `${c.results.length}/${c.questions.length}`}
-                      </span>
-                    ))}
                   </div>
 
                   {/* Current card front */}
