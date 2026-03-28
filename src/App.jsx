@@ -132,18 +132,23 @@ export default function App() {
   const [ankiError, setAnkiError] = useState(null)
   const [ankiGenerating, setAnkiGenerating] = useState(false)
   const [showAnkiSettings, setShowAnkiSettings] = useState(false)
-  const defaultProfile = {
-    id: 1, name: 'Profile 1',
+  const defaultMode = {
+    id: 1, name: 'Language Learning', type: 'language', description: '',
     fields: { pronunciation: true, translation: true, synonyms: true, definition: true, example: true },
     frontTemplate: '{word} ({partOfSpeech})',
     backTemplate: 'Pronunciación: {pronunciation}\nTraducción: {translation}\nSinónimos: {synonyms}\nDefinición: {definition}\nEjemplo: {example}',
+    tagRules: 'Always include:\n- part of speech (e.g. verb, noun, adjective)\n- source language (e.g. spanish, french)\n- "screenlens"\n\nAlso include when relevant:\n- verb tense (e.g. present, past, subjunctive)\n- difficulty (e.g. common, intermediate, advanced)\n- topic (e.g. food, emotion, travel, nature)',
   }
-  const [ankiProfiles, setAnkiProfiles] = useState([defaultProfile])
-  const [ankiActiveProfileId, setAnkiActiveProfileId] = useState(1)
-  const [showAnkiFormatEditor, setShowAnkiFormatEditor] = useState(false)
-  const [editingProfileName, setEditingProfileName] = useState(null)
+  const [modes, setModes] = useState([defaultMode])
+  const [activeModeId, setActiveModeId] = useState(1)
+  const [showModePanel, setShowModePanel] = useState(false)
+  const [showModeFormatEditor, setShowModeFormatEditor] = useState(false)
+  const [editingModeName, setEditingModeName] = useState(null)
+  const [modeCreating, setModeCreating] = useState(false)
+  const [modeEditInput, setModeEditInput] = useState('')
 
-  const ankiFormat = ankiProfiles.find((p) => p.id === ankiActiveProfileId) || ankiProfiles[0] || defaultProfile
+  const activeMode = modes.find((m) => m.id === activeModeId) || modes[0] || defaultMode
+  const ankiFormat = activeMode
 
   const fileInputRef = useRef(null)
   const containerRef = useRef(null)
@@ -159,12 +164,18 @@ export default function App() {
       fetch('/api/ankiformat').then((r) => r.json()).catch(() => null),
     ]).then(([keys, config, format]) => {
       if (format) {
-        if (format.profiles) {
-          setAnkiProfiles(format.profiles)
-          if (format.activeProfileId) setAnkiActiveProfileId(format.activeProfileId)
+        if (format.modes) {
+          setModes(format.modes)
+          if (format.activeModeId) setActiveModeId(format.activeModeId)
+        } else if (format.profiles) {
+          // Migrate profiles → modes
+          const migrated = format.profiles.map((p) => ({
+            ...p, type: 'language', description: '', tagRules: defaultMode.tagRules,
+          }))
+          setModes(migrated)
+          if (format.activeProfileId) setActiveModeId(format.activeProfileId)
         } else if (format.fields) {
-          // Migrate old single-format to profile
-          setAnkiProfiles([{ id: 1, name: 'Profile 1', ...format }])
+          setModes([{ ...defaultMode, ...format, id: 1, name: 'Language Learning', type: 'language' }])
         }
       }
       setApiKeys(keys)
@@ -836,17 +847,36 @@ In 1-2 short sentences: what does "${word.text}" mean here and what part of spee
     const context = ocrWords.map((w) => w.text).join(' ')
     const fmt = ankiFormat
 
-    // Build the AI prompt based on which fields are enabled
+    // Build the AI prompt based on which fields are enabled (dynamic)
+    const fieldDescriptions = {
+      pronunciation: `pronunciation guide in English phonetics (e.g. "KAH-lee-do"), include gender variants if applicable`,
+      translation: `translation to ${tgtLang}`,
+      synonyms: `comma-separated synonyms in ${tgtLang}, grouped by meaning if multiple`,
+      definition: activeMode.type === 'language'
+        ? `definition in ${srcLang} (the source language, not ${tgtLang})`
+        : `clear, concise definition`,
+      example: activeMode.type === 'language'
+        ? `example sentence in ${srcLang} using the word in context, followed by (${tgtLang} translation in parentheses)`
+        : `practical example or scenario illustrating this concept`,
+    }
     const fieldRequests = []
-    if (fmt.fields.pronunciation) fieldRequests.push(`"pronunciation": pronunciation guide in English phonetics (e.g. "KAH-lee-do"), include gender variants if applicable`)
-    if (fmt.fields.translation) fieldRequests.push(`"translation": translation to ${tgtLang}`)
-    if (fmt.fields.synonyms) fieldRequests.push(`"synonyms": comma-separated synonyms in ${tgtLang}, grouped by meaning if multiple`)
-    if (fmt.fields.definition) fieldRequests.push(`"definition": definition in ${srcLang} (the source language, not ${tgtLang})`)
-    if (fmt.fields.example) fieldRequests.push(`"example": example sentence in ${srcLang} using the word in context, followed by (${tgtLang} translation in parentheses)`)
+    Object.entries(fmt.fields).forEach(([field, enabled]) => {
+      if (!enabled) return
+      const hint = fieldDescriptions[field] || `${field} - provide relevant content for this field`
+      fieldRequests.push(`"${field}": ${hint}`)
+    })
+    // Add tag generation
+    const tagInstruction = fmt.tagRules
+      ? `"tags": array of tag strings. Rules:\n${fmt.tagRules}`
+      : `"tags": array of relevant lowercase tags (include "screenlens")`
+    fieldRequests.push(tagInstruction)
 
-    const prompt = `Generate an Anki flashcard for the word "${word.text}" (${word.partOfSpeech || 'unknown'}).
-Source language: ${srcLang}
-Translation: ${word.translation}
+    const modeContext = activeMode.type === 'language'
+      ? `Source language: ${srcLang}\nTranslation: ${word.translation}`
+      : `Study subject: ${activeMode.description || activeMode.name}`
+
+    const prompt = `Generate an Anki flashcard for the ${activeMode.type === 'language' ? 'word' : 'term'} "${word.text}" (${word.partOfSpeech || 'unknown'}).
+${modeContext}
 Context: "${context}"
 
 Return a JSON object with these fields:
@@ -860,25 +890,27 @@ Output ONLY raw JSON. No markdown, no backticks.`
       const cardData = JSON.parse(text.trim().replace(/^```json?\s*/i, '').replace(/```\s*$/, ''))
       console.log('[Anki] AI card data:', cardData)
 
-      // Build front from template
-      const front = fmt.frontTemplate
-        .replace('{word}', word.text)
-        .replace('{partOfSpeech}', word.partOfSpeech || '')
-        .replace('{pronunciation}', cardData.pronunciation || word.pronunciation || '')
-        .replace('{translation}', cardData.translation || word.translation || '')
+      // Dynamic template replacement
+      const replacements = {
+        word: word.text, term: word.text,
+        partOfSpeech: word.partOfSpeech || '',
+        ...cardData,
+      }
+      // Remove tags from replacements (it's an array, not a template field)
+      const aiTags = cardData.tags
+      delete replacements.tags
 
-      // Build back from template
-      const back = fmt.backTemplate
-        .replace('{pronunciation}', cardData.pronunciation || word.pronunciation || '')
-        .replace('{translation}', cardData.translation || word.translation || '')
-        .replace('{synonyms}', cardData.synonyms || word.synonyms?.join(', ') || '')
-        .replace('{definition}', cardData.definition || '')
-        .replace('{example}', cardData.example || '')
-        .replace('{word}', word.text)
-        .replace('{partOfSpeech}', word.partOfSpeech || '')
+      let front = fmt.frontTemplate
+      let back = fmt.backTemplate
+      Object.entries(replacements).forEach(([key, val]) => {
+        const re = new RegExp(`\\{${key}\\}`, 'g')
+        front = front.replace(re, String(val || ''))
+        back = back.replace(re, String(val || ''))
+      })
 
-      const langTag = (LANGS.find((l) => l.code === language)?.label || language).toLowerCase()
-      const tags = ['screenlens', langTag]
+      const tags = Array.isArray(aiTags) && aiTags.length > 0
+        ? aiTags
+        : ['screenlens']
       console.log('[Anki] card generated', { front, back, tags })
       setAnkiCard({ front, back, tags })
     } catch (err) {
@@ -889,50 +921,83 @@ Output ONLY raw JSON. No markdown, no backticks.`
     }
   }
 
-  const saveAnkiProfiles = (profiles, activeId) => {
-    const id = activeId || ankiActiveProfileId
-    setAnkiProfiles(profiles)
-    setAnkiActiveProfileId(id)
-    const payload = { profiles, activeProfileId: id }
+  const saveModes = (modeList, activeId) => {
+    const id = activeId || activeModeId
+    setModes(modeList)
+    setActiveModeId(id)
+    const payload = { modes: modeList, activeModeId: id }
     fetch('/api/ankiformat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     }).catch(() => {})
-    console.log('[Anki] profiles saved', payload)
+    console.log('[Mode] saved', payload)
   }
 
-  const updateActiveProfile = (updates) => {
-    const updated = ankiProfiles.map((p) =>
-      p.id === ankiActiveProfileId ? { ...p, ...updates } : p
+  const updateActiveMode = (updates) => {
+    const updated = modes.map((m) =>
+      m.id === activeModeId ? { ...m, ...updates } : m
     )
-    saveAnkiProfiles(updated)
+    saveModes(updated)
   }
 
-  const addProfile = () => {
-    const existingNames = ankiProfiles.map((p) => p.name)
-    let num = ankiProfiles.length + 1
-    let name = `Profile ${num}`
-    while (existingNames.includes(name)) { num++; name = `Profile ${num}` }
-    const newId = Math.max(...ankiProfiles.map((p) => p.id)) + 1
-    const newProfile = { ...defaultProfile, id: newId, name }
-    const updated = [...ankiProfiles, newProfile]
-    saveAnkiProfiles(updated, newId)
+  const deleteMode = (id) => {
+    if (modes.length <= 1) return
+    const updated = modes.filter((m) => m.id !== id)
+    const newActiveId = id === activeModeId ? updated[0].id : activeModeId
+    saveModes(updated, newActiveId)
   }
 
-  const deleteProfile = (id) => {
-    if (ankiProfiles.length <= 1) return
-    const updated = ankiProfiles.filter((p) => p.id !== id)
-    const newActiveId = id === ankiActiveProfileId ? updated[0].id : ankiActiveProfileId
-    saveAnkiProfiles(updated, newActiveId)
-  }
-
-  const renameProfile = (id, newName) => {
-    const updated = ankiProfiles.map((p) =>
-      p.id === id ? { ...p, name: newName } : p
+  const renameMode = (id, newName) => {
+    const updated = modes.map((m) =>
+      m.id === id ? { ...m, name: newName } : m
     )
-    saveAnkiProfiles(updated)
-    setEditingProfileName(null)
+    saveModes(updated)
+    setEditingModeName(null)
+  }
+
+  // ─── AI Mode Creation ────────────────────────────────────────────────────
+  const createMode = async (description) => {
+    if (!apiKey || modeCreating) return
+    setModeCreating(true)
+    try {
+      const prompt = `The user wants to create a study mode for: "${description}"
+
+Generate a JSON config for this study mode:
+- "name": short name (2-3 words max, e.g. "Security+", "Spanish", "Organic Chemistry")
+- "type": "language" if this is about learning a foreign language, "general" otherwise
+- "fields": object with field names as keys and true as values. These become the JSON keys the AI will fill when generating flashcards. For language modes use: { "pronunciation": true, "translation": true, "synonyms": true, "definition": true, "example": true }. For general modes, choose 3-5 fields appropriate to the subject (e.g. { "definition": true, "example": true, "category": true, "keyPoints": true }).
+- "frontTemplate": card front using {fieldName} placeholders. For language: "{word} ({partOfSpeech})". For general: "{term}" or similar.
+- "backTemplate": card back using {fieldName} placeholders and \\n for newlines. Use descriptive labels before each placeholder.
+- "tagRules": instructions for AI tag generation. Include "screenlens" always. Add subject-specific categories. Tags should be lowercase, no spaces (use hyphens).
+
+Output ONLY raw JSON. No markdown, no backticks.`
+
+      const text = await providerConfig.call(apiKey,
+        'You configure study modes for a learning app. Always respond with valid JSON only.',
+        prompt
+      )
+      const config = JSON.parse(text.trim().replace(/^```json?\s*/i, '').replace(/```\s*$/, ''))
+
+      const newId = Math.max(0, ...modes.map((m) => m.id)) + 1
+      const newMode = {
+        id: newId,
+        name: config.name || description.slice(0, 20),
+        type: config.type || 'general',
+        description,
+        fields: config.fields || { definition: true, example: true },
+        frontTemplate: config.frontTemplate || '{term}',
+        backTemplate: config.backTemplate || 'Definition: {definition}',
+        tagRules: config.tagRules || 'Include: screenlens',
+      }
+      saveModes([...modes, newMode], newId)
+      console.log('[Mode] created:', newMode)
+    } catch (err) {
+      console.error('[Mode] creation failed:', err.message)
+      setAnkiError('Mode creation failed: ' + err.message)
+    } finally {
+      setModeCreating(false)
+    }
   }
 
   const syncToAnki = async (idx) => {
@@ -1239,15 +1304,17 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
           <span style={S.badge}>LOCAL</span>
         </div>
         <div style={S.headerRight}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#1c2129', border: '1px solid #2a3040', borderRadius: 6, padding: '2px 4px' }}>
-            <select value={language} onChange={(e) => setLanguage(e.target.value)} style={{ ...S.select, border: 'none', background: 'transparent', padding: '4px 6px' }}>
-              {LANGS.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
-            </select>
-            <span style={{ color: '#58a6ff', fontSize: 14, fontWeight: 700 }}>→</span>
-            <select value={targetLang} onChange={(e) => setTargetLang(e.target.value)} style={{ ...S.select, border: 'none', background: 'transparent', padding: '4px 6px' }}>
-              {LANGS.filter((l) => l.code !== 'auto').map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
-            </select>
-          </div>
+          {activeMode.type === 'language' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#1c2129', border: '1px solid #2a3040', borderRadius: 6, padding: '2px 4px' }}>
+              <select value={language} onChange={(e) => setLanguage(e.target.value)} style={{ ...S.select, border: 'none', background: 'transparent', padding: '4px 6px' }}>
+                {LANGS.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
+              </select>
+              <span style={{ color: '#58a6ff', fontSize: 14, fontWeight: 700 }}>→</span>
+              <select value={targetLang} onChange={(e) => setTargetLang(e.target.value)} style={{ ...S.select, border: 'none', background: 'transparent', padding: '4px 6px' }}>
+                {LANGS.filter((l) => l.code !== 'auto').map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
+              </select>
+            </div>
+          )}
 
           {stage === 'done' && (
             <button onClick={() => setShowHighlights(!showHighlights)} style={{
@@ -1274,6 +1341,12 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
               <option key={key} value={key}>{p.label}</option>
             ))}
           </select>
+
+          <button onClick={() => setShowModePanel(!showModePanel)} style={{
+            ...S.ghostBtn, color: '#58a6ff', borderColor: 'rgba(88,166,255,0.25)',
+          }}>
+            {activeMode.type === 'language' ? '\u{1F310}' : '\u{1F4DA}'} {activeMode.name}
+          </button>
 
           <button onClick={() => setShowAnkiSettings(!showAnkiSettings)} style={{
             ...S.ghostBtn,
@@ -1338,6 +1411,73 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
         </div>
       )}
 
+      {showModePanel && (
+        <div style={{ ...S.keyBar, flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#58a6ff' }}>Learning Modes</div>
+
+          {/* Mode list */}
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+            {modes.map((m) => (
+              <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                {editingModeName === m.id ? (
+                  <input autoFocus defaultValue={m.name}
+                    onBlur={(e) => renameMode(m.id, e.target.value || m.name)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') renameMode(m.id, e.target.value || m.name) }}
+                    style={{ ...S.keyInput, width: 120, fontSize: 11, padding: '4px 8px' }}
+                  />
+                ) : (
+                  <button
+                    onClick={() => { setActiveModeId(m.id); saveModes(modes, m.id) }}
+                    onDoubleClick={() => setEditingModeName(m.id)}
+                    title={`${m.type === 'language' ? '\u{1F310}' : '\u{1F4DA}'} ${m.description || m.name}\nDouble-click to rename`}
+                    style={{
+                      padding: '4px 10px', borderRadius: 5, fontSize: 11, fontFamily: 'inherit', cursor: 'pointer',
+                      background: m.id === activeModeId ? 'rgba(88,166,255,.2)' : 'rgba(125,133,144,.1)',
+                      color: m.id === activeModeId ? '#58a6ff' : '#7d8590',
+                      border: m.id === activeModeId ? '1px solid rgba(88,166,255,.4)' : '1px solid #2a3040',
+                      fontWeight: m.id === activeModeId ? 700 : 400,
+                    }}
+                  >
+                    {m.type === 'language' ? '\u{1F310}' : '\u{1F4DA}'} {m.name}
+                  </button>
+                )}
+                {modes.length > 1 && (
+                  <span onClick={() => deleteMode(m.id)} style={{ cursor: 'pointer', color: '#7d8590', fontSize: 12 }}>&times;</span>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* Create new mode */}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input
+              value={modeEditInput}
+              onChange={(e) => setModeEditInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && modeEditInput.trim()) { createMode(modeEditInput.trim()); setModeEditInput('') } }}
+              placeholder="What do you want to learn? (e.g. Spanish, Security+, Organic Chemistry)"
+              style={{ ...S.keyInput, flex: 1 }}
+              disabled={modeCreating}
+            />
+            <button
+              onClick={() => { if (modeEditInput.trim()) { createMode(modeEditInput.trim()); setModeEditInput('') } }}
+              disabled={modeCreating || !modeEditInput.trim()}
+              style={{ ...S.keyDone, opacity: modeCreating || !modeEditInput.trim() ? 0.5 : 1 }}
+            >
+              {modeCreating ? 'Creating...' : 'Create Mode'}
+            </button>
+          </div>
+
+          {/* Bottom buttons */}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => setShowModeFormatEditor(!showModeFormatEditor)}
+              style={{ ...S.getKeyLink, background: 'rgba(210,168,255,.12)', color: '#d2a8ff', borderColor: 'rgba(210,168,255,.25)' }}>
+              Edit Card Format
+            </button>
+            <button onClick={() => setShowModePanel(false)} style={S.keyDone}>Done</button>
+          </div>
+        </div>
+      )}
+
       {showAnkiSettings && (
         <div style={S.keyBar}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1361,68 +1501,24 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
           <button onClick={refreshAnkiConnection} style={S.getKeyLink}>
             {ankiConnected === null ? 'Checking...' : 'Refresh'}
           </button>
-          <button onClick={() => setShowAnkiFormatEditor(!showAnkiFormatEditor)} style={{ ...S.getKeyLink, background: 'rgba(210,168,255,.12)', color: '#d2a8ff', borderColor: 'rgba(210,168,255,.25)' }}>
-            Card Format
-          </button>
           <button onClick={() => setShowAnkiSettings(false)} style={S.keyDone}>Done</button>
           <span style={{ fontSize: 11, color: '#7d8590' }}>
             Requires Anki with AnkiConnect addon (code: 2055492159)
           </span>
         </div>
       )}
-      {showAnkiFormatEditor && showAnkiSettings && (
+      {showModeFormatEditor && showModePanel && (
         <div style={{ ...S.keyBar, flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: '#d2a8ff' }}>Card Format Profiles</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#d2a8ff' }}>Edit Format: {activeMode.name}</div>
 
-          {/* Profile selector */}
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-            {ankiProfiles.map((p) => (
-              <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                {editingProfileName === p.id ? (
-                  <input
-                    autoFocus
-                    defaultValue={p.name}
-                    onBlur={(e) => renameProfile(p.id, e.target.value || p.name)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') renameProfile(p.id, e.target.value || p.name) }}
-                    style={{ ...S.keyInput, width: 100, fontSize: 11, padding: '4px 8px' }}
-                  />
-                ) : (
-                  <button
-                    onClick={() => { setAnkiActiveProfileId(p.id); saveAnkiProfiles(ankiProfiles, p.id) }}
-                    onDoubleClick={() => setEditingProfileName(p.id)}
-                    title="Click to select, double-click to rename"
-                    style={{
-                      padding: '4px 10px', borderRadius: 5, fontSize: 11, fontFamily: 'inherit', cursor: 'pointer',
-                      background: p.id === ankiActiveProfileId ? 'rgba(210,168,255,.2)' : 'rgba(125,133,144,.1)',
-                      color: p.id === ankiActiveProfileId ? '#d2a8ff' : '#7d8590',
-                      border: p.id === ankiActiveProfileId ? '1px solid rgba(210,168,255,.4)' : '1px solid #2a3040',
-                      fontWeight: p.id === ankiActiveProfileId ? 700 : 400,
-                    }}
-                  >
-                    {p.name}
-                  </button>
-                )}
-                {ankiProfiles.length > 1 && (
-                  <span onClick={() => deleteProfile(p.id)} style={{ cursor: 'pointer', color: '#7d8590', fontSize: 12, padding: '0 2px' }} title="Delete profile">&times;</span>
-                )}
-              </div>
-            ))}
-            <button
-              onClick={addProfile}
-              style={{ padding: '4px 10px', borderRadius: 5, fontSize: 11, fontFamily: 'inherit', cursor: 'pointer', background: 'rgba(126,231,135,.1)', color: '#7ee787', border: '1px solid rgba(126,231,135,.25)' }}
-            >
-              + Add Profile
-            </button>
-          </div>
-
-          {/* Active profile settings */}
+          {/* Field toggles */}
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
             {Object.entries(ankiFormat.fields).map(([field, enabled]) => (
               <label key={field} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: enabled ? '#e6edf3' : '#7d8590', cursor: 'pointer' }}>
                 <input
                   type="checkbox"
                   checked={enabled}
-                  onChange={() => updateActiveProfile({ fields: { ...ankiFormat.fields, [field]: !enabled } })}
+                  onChange={() => updateActiveMode({ fields: { ...ankiFormat.fields, [field]: !enabled } })}
                 />
                 {field}
               </label>
@@ -1433,7 +1529,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
               <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 4 }}>Front template</div>
               <input
                 value={ankiFormat.frontTemplate}
-                onChange={(e) => updateActiveProfile({ frontTemplate: e.target.value })}
+                onChange={(e) => updateActiveMode({ frontTemplate: e.target.value })}
                 style={{ ...S.keyInput, fontSize: 11 }}
                 placeholder="{word} ({partOfSpeech})"
               />
@@ -1443,14 +1539,22 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
             <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 4 }}>Back template (use \n for newlines)</div>
             <textarea
               value={ankiFormat.backTemplate}
-              onChange={(e) => updateActiveProfile({ backTemplate: e.target.value })}
+              onChange={(e) => updateActiveMode({ backTemplate: e.target.value })}
               style={{ ...S.keyInput, fontSize: 11, minHeight: 80, resize: 'vertical' }}
               placeholder="Pronunciación: {pronunciation}\nTraducción: {translation}"
             />
           </div>
+          <div>
+            <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 4 }}>Tag generation rules</div>
+            <textarea
+              value={activeMode.tagRules || ''}
+              onChange={(e) => updateActiveMode({ tagRules: e.target.value })}
+              style={{ ...S.keyInput, fontSize: 11, minHeight: 60, resize: 'vertical' }}
+              placeholder="Instructions for AI tag generation..."
+            />
+          </div>
           <div style={{ fontSize: 10, color: '#7d8590' }}>
-            Available: {'{word}'} {'{partOfSpeech}'} {'{pronunciation}'} {'{translation}'} {'{synonyms}'} {'{definition}'} {'{example}'}
-            &nbsp;— Double-click a profile name to rename it
+            Available: {'{word}'} {'{term}'} {'{partOfSpeech}'} {'{pronunciation}'} {'{translation}'} {'{synonyms}'} {'{definition}'} {'{example}'}
           </div>
         </div>
       )}
@@ -1755,6 +1859,16 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                   <div style={S.ttAnkiCardContent}>{ankiCard.front}</div>
                   <div style={S.ttAnkiCardLabel}>Back</div>
                   <div style={{ ...S.ttAnkiCardContent, whiteSpace: 'pre-line', marginBottom: 4 }}>{ankiCard.back}</div>
+                  {ankiCard.tags?.length > 0 && (
+                    <div style={{ marginBottom: 6 }}>
+                      <div style={S.ttAnkiCardLabel}>Tags</div>
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                        {ankiCard.tags.map((tag, i) => (
+                          <span key={i} style={{ fontSize: 10, padding: '2px 6px', borderRadius: 3, background: 'rgba(125,133,144,.15)', color: '#c9d1d9', border: '1px solid rgba(125,133,144,.2)' }}>{tag}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
                     <span>Deck:</span>
                     {ankiDecks.length > 0 ? (
