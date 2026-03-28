@@ -783,7 +783,11 @@ export default function App() {
   }
   const handleDrop = (e) => {
     e.preventDefault(); setDragging(false)
-    if (e.dataTransfer?.files?.[0]) loadImageFromFile(e.dataTransfer.files[0])
+    const file = e.dataTransfer?.files?.[0]
+    if (!file) return
+    // Don't handle text files at app level — they're for knowledge base
+    if (file.name.match(/\.(txt|md)$/i)) return
+    loadImageFromFile(file)
   }
 
   // ─── Lazy translate on hover for missed words ──────────────────────────────
@@ -1160,7 +1164,9 @@ Output ONLY raw JSON. No markdown, no backticks.`
 
   const handleKnowledgeDrop = (e) => {
     e.preventDefault()
+    e.stopPropagation()
     setKnowledgeDragging(false)
+    setDragging(false)
     const files = Array.from(e.dataTransfer.files).filter(f => f.name.match(/\.(txt|md)$/i))
     files.forEach(uploadKnowledgeFile)
   }
@@ -2165,7 +2171,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
 
                 {/* Drag & drop zone */}
                 <div
-                  onDragOver={(e) => { e.preventDefault(); setKnowledgeDragging(true) }}
+                  onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setKnowledgeDragging(true) }}
                   onDragLeave={() => setKnowledgeDragging(false)}
                   onDrop={handleKnowledgeDrop}
                   style={{
