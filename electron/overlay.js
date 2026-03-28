@@ -6,6 +6,8 @@ const root = document.getElementById('overlay-root')
 
 let currentTooltip = null
 let statusEl = null
+let screenshotWidth = 0
+let screenshotHeight = 0
 
 // ─── Status Bar ──────────────────────────────────────────────────────────────
 function showStatus(msg, loading = false) {
@@ -18,6 +20,15 @@ function showStatus(msg, loading = false) {
 
 function hideStatus() {
   if (statusEl) { statusEl.remove(); statusEl = null }
+}
+
+// ─── Get image dimensions ───────────────────────────────────────────────────
+function getImageDimensions(dataUrl) {
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => resolve({ width: img.width, height: img.height })
+    img.src = dataUrl
+  })
 }
 
 // ─── OCR with Tesseract.js via CDN ──────────────────────────────────────────
@@ -63,6 +74,9 @@ async function runOCR(dataUrl) {
     }))
 
   console.log('[Overlay] OCR found', words.length, 'words')
+  if (words.length > 0) {
+    console.log('[Overlay] Sample bbox:', words[0].text, words[0].bbox)
+  }
   return words
 }
 
@@ -81,14 +95,14 @@ async function getConfig() {
 }
 
 async function translateWords(words, apiKey, fromLang, toLang) {
-  showStatus('Translating...', true)
+  showStatus(`Translating ${words.length} words...`, true)
 
   const context = words.map((w) => w.text).join(' ')
   const input = JSON.stringify({
-    words: words.map((w) => ({ i: w.i, w: w.text })),
+    words: words.slice(0, 80).map((w) => ({ i: w.i, w: w.text })),
     from: fromLang || 'Spanish',
     to: toLang || 'English',
-    context,
+    context: context.substring(0, 500),
   })
 
   const prompt = `Translate words from one language to another. Classify each word by category and part of speech.
@@ -143,32 +157,54 @@ function clearOverlay() {
 
 function renderWords(words) {
   hideStatus()
-  showStatus(`${words.length} words translated. Hover to see translations. ESC to close.`)
 
-  const posColors = {
-    noun: { bg: 'rgba(88,166,255,.15)', border: 'rgba(88,166,255,.3)', text: '#58a6ff' },
-    verb: { bg: 'rgba(210,168,255,.15)', border: 'rgba(210,168,255,.3)', text: '#d2a8ff' },
-    adj: { bg: 'rgba(255,166,87,.15)', border: 'rgba(255,166,87,.3)', text: '#ffa657' },
-  }
+  // Calculate scale factor: screenshot coords → screen coords
+  const screenW = window.innerWidth
+  const screenH = window.innerHeight
+  const scaleX = screenshotWidth > 0 ? screenW / screenshotWidth : 1
+  const scaleY = screenshotHeight > 0 ? screenH / screenshotHeight : 1
 
+  console.log('[Overlay] Rendering', words.length, 'words')
+  console.log('[Overlay] Screenshot:', screenshotWidth, 'x', screenshotHeight)
+  console.log('[Overlay] Screen:', screenW, 'x', screenH)
+  console.log('[Overlay] Scale:', scaleX.toFixed(3), 'x', scaleY.toFixed(3))
+
+  let rendered = 0
   words.forEach((word) => {
     if (!word.translation || word.category === 'target' || word.category === 'number') return
 
-    const colors = posColors[word.partOfSpeech] || posColors.noun
+    const x0 = Math.round(word.bbox.x0 * scaleX)
+    const y0 = Math.round(word.bbox.y0 * scaleY)
+    const x1 = Math.round(word.bbox.x1 * scaleX)
+    const y1 = Math.round(word.bbox.y1 * scaleY)
+    const w = x1 - x0
+    const h = y1 - y0
+
+    if (w < 5 || h < 5) return // skip tiny boxes
+
     const box = document.createElement('div')
     box.className = 'word-box'
-    box.style.left = word.bbox.x0 + 'px'
-    box.style.top = word.bbox.y0 + 'px'
-    box.style.width = (word.bbox.x1 - word.bbox.x0) + 'px'
-    box.style.height = (word.bbox.y1 - word.bbox.y0) + 'px'
-    box.style.background = colors.bg
-    box.style.borderColor = colors.border
+    box.style.left = x0 + 'px'
+    box.style.top = y0 + 'px'
+    box.style.width = w + 'px'
+    box.style.height = h + 'px'
+
+    // Store word data on element
+    box._word = word
 
     box.addEventListener('mouseenter', () => showTooltip(word, box))
     box.addEventListener('mouseleave', () => hideTooltip())
 
     root.appendChild(box)
+    rendered++
   })
+
+  console.log('[Overlay] Rendered', rendered, 'word boxes')
+  showStatus(`${rendered} words. Hover to see translations. ESC to close.`)
+
+  if (rendered === 0 && words.length > 0) {
+    showStatus(`${words.length} words translated but 0 rendered. Check console for coordinate issues.`)
+  }
 }
 
 function showTooltip(word, boxEl) {
@@ -190,9 +226,16 @@ function showTooltip(word, boxEl) {
 
   // Position above the word box
   const rect = boxEl.getBoundingClientRect()
-  tt.style.left = Math.max(10, rect.left) + 'px'
-  tt.style.top = Math.max(10, rect.top - 10) + 'px'
-  tt.style.transform = 'translateY(-100%)'
+  let left = Math.max(10, rect.left)
+  let top = rect.top - 10
+
+  // If tooltip would go off-screen top, put it below
+  if (top < 80) top = rect.bottom + 10
+  else top = top // transform will handle the rest
+
+  tt.style.left = left + 'px'
+  tt.style.top = top + 'px'
+  if (rect.top >= 80) tt.style.transform = 'translateY(-100%)'
 
   document.body.appendChild(tt)
   currentTooltip = tt
@@ -208,6 +251,12 @@ async function processScreenshot(dataUrl) {
   showStatus('Processing screenshot...', true)
 
   try {
+    // Get screenshot dimensions for coordinate scaling
+    const dims = await getImageDimensions(dataUrl)
+    screenshotWidth = dims.width
+    screenshotHeight = dims.height
+    console.log('[Overlay] Screenshot dimensions:', dims.width, 'x', dims.height)
+
     // Get API config from Vite server
     const cfg = await getConfig()
     if (!cfg) { showStatus('Error: Cannot connect to ScreenLens (is npm run dev running?)'); return }
@@ -237,6 +286,7 @@ async function processScreenshot(dataUrl) {
       }
     })
 
+    console.log('[Overlay] Merged', merged.length, 'words, translated:', merged.filter(w => w.translation).length)
     renderWords(merged)
   } catch (err) {
     console.error('[Overlay] Processing failed:', err)
@@ -247,7 +297,7 @@ async function processScreenshot(dataUrl) {
 // ─── IPC Listeners ──────────────────────────────────────────────────────────
 if (window.overlayAPI) {
   window.overlayAPI.onCapture((dataUrl) => {
-    console.log('[Overlay] Received screenshot')
+    console.log('[Overlay] Received screenshot, length:', dataUrl.length)
     processScreenshot(dataUrl)
   })
 
@@ -265,4 +315,4 @@ if (window.overlayAPI) {
   })
 }
 
-console.log('[Overlay] Script loaded, waiting for capture...')
+console.log('[Overlay] Script loaded. Screen:', window.innerWidth, 'x', window.innerHeight)
