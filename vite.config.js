@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react'
 import fs from 'fs'
 import path from 'path'
 import http from 'http'
+import { spawn } from 'child_process'
 
 const ENV_FILE = path.resolve('.env')
 const CONFIG_FILE = path.resolve('config.json')
@@ -366,25 +367,21 @@ function apiPlugin() {
             res.end(JSON.stringify({ ok: true, status: 'already running' }))
             return
           }
+          const electronCli = path.resolve('node_modules/electron/cli.js')
+          if (!fs.existsSync(electronCli)) {
+            res.end(JSON.stringify({ error: 'Electron not installed. Run: npm install electron --save-optional' }))
+            return
+          }
           try {
-            const { spawn } = require('child_process')
-            const electronPath = require.resolve('electron/cli.js')
-            overlayProcess = spawn(process.execPath, [electronPath, path.resolve('electron/main.js')], {
+            overlayProcess = spawn(process.execPath, [electronCli, path.resolve('electron/main.js')], {
               stdio: 'inherit', detached: false,
             })
             overlayProcess.on('exit', () => { overlayProcess = null })
+            console.log('[Overlay] Electron process launched')
             res.end(JSON.stringify({ ok: true, status: 'launched' }))
           } catch (e) {
-            try {
-              const { spawn } = require('child_process')
-              overlayProcess = spawn('npx', ['electron', path.resolve('electron/main.js')], {
-                stdio: 'inherit', detached: false, shell: true,
-              })
-              overlayProcess.on('exit', () => { overlayProcess = null })
-              res.end(JSON.stringify({ ok: true, status: 'launched via npx' }))
-            } catch (e2) {
-              res.end(JSON.stringify({ error: 'Electron not installed. Run: npm install electron --save-optional' }))
-            }
+            console.error('[Overlay] Launch failed:', e.message)
+            res.end(JSON.stringify({ error: 'Failed to launch: ' + e.message }))
           }
         } else { res.statusCode = 405; res.end('') }
       })
