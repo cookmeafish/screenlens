@@ -132,12 +132,18 @@ export default function App() {
   const [ankiError, setAnkiError] = useState(null)
   const [ankiGenerating, setAnkiGenerating] = useState(false)
   const [showAnkiSettings, setShowAnkiSettings] = useState(false)
-  const [ankiFormat, setAnkiFormat] = useState({
+  const defaultProfile = {
+    id: 1, name: 'Profile 1',
     fields: { pronunciation: true, translation: true, synonyms: true, definition: true, example: true },
     frontTemplate: '{word} ({partOfSpeech})',
     backTemplate: 'Pronunciación: {pronunciation}\nTraducción: {translation}\nSinónimos: {synonyms}\nDefinición: {definition}\nEjemplo: {example}',
-  })
+  }
+  const [ankiProfiles, setAnkiProfiles] = useState([defaultProfile])
+  const [ankiActiveProfileId, setAnkiActiveProfileId] = useState(1)
   const [showAnkiFormatEditor, setShowAnkiFormatEditor] = useState(false)
+  const [editingProfileName, setEditingProfileName] = useState(null)
+
+  const ankiFormat = ankiProfiles.find((p) => p.id === ankiActiveProfileId) || ankiProfiles[0] || defaultProfile
 
   const fileInputRef = useRef(null)
   const containerRef = useRef(null)
@@ -152,7 +158,15 @@ export default function App() {
       fetch('/api/config').then((r) => r.json()).catch(() => ({})),
       fetch('/api/ankiformat').then((r) => r.json()).catch(() => null),
     ]).then(([keys, config, format]) => {
-      if (format && format.fields) setAnkiFormat(format)
+      if (format) {
+        if (format.profiles) {
+          setAnkiProfiles(format.profiles)
+          if (format.activeProfileId) setAnkiActiveProfileId(format.activeProfileId)
+        } else if (format.fields) {
+          // Migrate old single-format to profile
+          setAnkiProfiles([{ id: 1, name: 'Profile 1', ...format }])
+        }
+      }
       setApiKeys(keys)
       if (config.provider) setProvider(config.provider)
       if (config.language) setLanguage(config.language)
@@ -875,14 +889,50 @@ Output ONLY raw JSON. No markdown, no backticks.`
     }
   }
 
-  const saveAnkiFormat = (newFormat) => {
-    setAnkiFormat(newFormat)
+  const saveAnkiProfiles = (profiles, activeId) => {
+    const id = activeId || ankiActiveProfileId
+    setAnkiProfiles(profiles)
+    setAnkiActiveProfileId(id)
+    const payload = { profiles, activeProfileId: id }
     fetch('/api/ankiformat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newFormat),
+      body: JSON.stringify(payload),
     }).catch(() => {})
-    console.log('[Anki] format saved', newFormat)
+    console.log('[Anki] profiles saved', payload)
+  }
+
+  const updateActiveProfile = (updates) => {
+    const updated = ankiProfiles.map((p) =>
+      p.id === ankiActiveProfileId ? { ...p, ...updates } : p
+    )
+    saveAnkiProfiles(updated)
+  }
+
+  const addProfile = () => {
+    const existingNames = ankiProfiles.map((p) => p.name)
+    let num = ankiProfiles.length + 1
+    let name = `Profile ${num}`
+    while (existingNames.includes(name)) { num++; name = `Profile ${num}` }
+    const newId = Math.max(...ankiProfiles.map((p) => p.id)) + 1
+    const newProfile = { ...defaultProfile, id: newId, name }
+    const updated = [...ankiProfiles, newProfile]
+    saveAnkiProfiles(updated, newId)
+  }
+
+  const deleteProfile = (id) => {
+    if (ankiProfiles.length <= 1) return
+    const updated = ankiProfiles.filter((p) => p.id !== id)
+    const newActiveId = id === ankiActiveProfileId ? updated[0].id : ankiActiveProfileId
+    saveAnkiProfiles(updated, newActiveId)
+  }
+
+  const renameProfile = (id, newName) => {
+    const updated = ankiProfiles.map((p) =>
+      p.id === id ? { ...p, name: newName } : p
+    )
+    saveAnkiProfiles(updated)
+    setEditingProfileName(null)
   }
 
   const syncToAnki = async (idx) => {
@@ -1322,17 +1372,57 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
       )}
       {showAnkiFormatEditor && showAnkiSettings && (
         <div style={{ ...S.keyBar, flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: '#d2a8ff' }}>Card Format Settings</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#d2a8ff' }}>Card Format Profiles</div>
+
+          {/* Profile selector */}
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+            {ankiProfiles.map((p) => (
+              <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                {editingProfileName === p.id ? (
+                  <input
+                    autoFocus
+                    defaultValue={p.name}
+                    onBlur={(e) => renameProfile(p.id, e.target.value || p.name)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') renameProfile(p.id, e.target.value || p.name) }}
+                    style={{ ...S.keyInput, width: 100, fontSize: 11, padding: '4px 8px' }}
+                  />
+                ) : (
+                  <button
+                    onClick={() => { setAnkiActiveProfileId(p.id); saveAnkiProfiles(ankiProfiles, p.id) }}
+                    onDoubleClick={() => setEditingProfileName(p.id)}
+                    title="Click to select, double-click to rename"
+                    style={{
+                      padding: '4px 10px', borderRadius: 5, fontSize: 11, fontFamily: 'inherit', cursor: 'pointer',
+                      background: p.id === ankiActiveProfileId ? 'rgba(210,168,255,.2)' : 'rgba(125,133,144,.1)',
+                      color: p.id === ankiActiveProfileId ? '#d2a8ff' : '#7d8590',
+                      border: p.id === ankiActiveProfileId ? '1px solid rgba(210,168,255,.4)' : '1px solid #2a3040',
+                      fontWeight: p.id === ankiActiveProfileId ? 700 : 400,
+                    }}
+                  >
+                    {p.name}
+                  </button>
+                )}
+                {ankiProfiles.length > 1 && (
+                  <span onClick={() => deleteProfile(p.id)} style={{ cursor: 'pointer', color: '#7d8590', fontSize: 12, padding: '0 2px' }} title="Delete profile">&times;</span>
+                )}
+              </div>
+            ))}
+            <button
+              onClick={addProfile}
+              style={{ padding: '4px 10px', borderRadius: 5, fontSize: 11, fontFamily: 'inherit', cursor: 'pointer', background: 'rgba(126,231,135,.1)', color: '#7ee787', border: '1px solid rgba(126,231,135,.25)' }}
+            >
+              + Add Profile
+            </button>
+          </div>
+
+          {/* Active profile settings */}
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
             {Object.entries(ankiFormat.fields).map(([field, enabled]) => (
               <label key={field} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: enabled ? '#e6edf3' : '#7d8590', cursor: 'pointer' }}>
                 <input
                   type="checkbox"
                   checked={enabled}
-                  onChange={() => {
-                    const updated = { ...ankiFormat, fields: { ...ankiFormat.fields, [field]: !enabled } }
-                    saveAnkiFormat(updated)
-                  }}
+                  onChange={() => updateActiveProfile({ fields: { ...ankiFormat.fields, [field]: !enabled } })}
                 />
                 {field}
               </label>
@@ -1343,7 +1433,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
               <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 4 }}>Front template</div>
               <input
                 value={ankiFormat.frontTemplate}
-                onChange={(e) => saveAnkiFormat({ ...ankiFormat, frontTemplate: e.target.value })}
+                onChange={(e) => updateActiveProfile({ frontTemplate: e.target.value })}
                 style={{ ...S.keyInput, fontSize: 11 }}
                 placeholder="{word} ({partOfSpeech})"
               />
@@ -1353,13 +1443,14 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
             <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 4 }}>Back template (use \n for newlines)</div>
             <textarea
               value={ankiFormat.backTemplate}
-              onChange={(e) => saveAnkiFormat({ ...ankiFormat, backTemplate: e.target.value })}
+              onChange={(e) => updateActiveProfile({ backTemplate: e.target.value })}
               style={{ ...S.keyInput, fontSize: 11, minHeight: 80, resize: 'vertical' }}
               placeholder="Pronunciación: {pronunciation}\nTraducción: {translation}"
             />
           </div>
           <div style={{ fontSize: 10, color: '#7d8590' }}>
             Available: {'{word}'} {'{partOfSpeech}'} {'{pronunciation}'} {'{translation}'} {'{synonyms}'} {'{definition}'} {'{example}'}
+            &nbsp;— Double-click a profile name to rename it
           </div>
         </div>
       )}
