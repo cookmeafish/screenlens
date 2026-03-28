@@ -1020,9 +1020,11 @@ Output ONLY raw JSON. No markdown, no backticks.`
     if (!ankiConnected) return
     const decks = await ankiGetDecks().catch(() => [])
     setAnkiDecks(decks)
-    setDeckBrowserDeck(ankiDeck || decks[0] || '')
+    const deck = ankiDeck || decks[0] || ''
+    setDeckBrowserDeck(deck)
     setDeckBrowserActive(true)
     setDeckBrowserNotes([])
+    if (deck) loadDeckNotes(deck)
   }
 
   const loadDeckNotes = async (deck) => {
@@ -1042,14 +1044,22 @@ Output ONLY raw JSON. No markdown, no backticks.`
 
   const startEditNote = (note) => {
     const fields = {}
-    Object.entries(note.fields).forEach(([name, f]) => { fields[name] = f.value })
+    // Convert HTML to plain text for editing (br → newline)
+    Object.entries(note.fields).forEach(([name, f]) => {
+      fields[name] = f.value.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '')
+    })
     setDeckBrowserEditing(note.noteId)
     setDeckBrowserEditFields(fields)
   }
 
   const saveEditNote = async (noteId) => {
+    // Convert newlines back to <br> for Anki
+    const htmlFields = {}
+    Object.entries(deckBrowserEditFields).forEach(([name, val]) => {
+      htmlFields[name] = val.replace(/\n/g, '<br>')
+    })
     try {
-      await ankiUpdateNote(noteId, deckBrowserEditFields)
+      await ankiUpdateNote(noteId, htmlFields)
       ankiSync().catch(() => {})
       // Reload
       await loadDeckNotes(deckBrowserDeck)
@@ -2003,17 +2013,12 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
 
             {/* Deck picker + search */}
             <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-              <select value={deckBrowserDeck} onChange={(e) => { setDeckBrowserDeck(e.target.value); loadDeckNotes(e.target.value) }}
+              <select value={deckBrowserDeck} onChange={(e) => { setDeckBrowserDeck(e.target.value); if (e.target.value) loadDeckNotes(e.target.value) }}
                 style={{ ...S.select, minWidth: 150 }}>
                 <option value="">Select deck...</option>
                 {ankiDecks.map((d) => <option key={d} value={d}>{d}</option>)}
               </select>
-              {!deckBrowserNotes.length && deckBrowserDeck && (
-                <button onClick={() => loadDeckNotes(deckBrowserDeck)} disabled={deckBrowserLoading}
-                  style={{ ...S.captureBtn, borderRadius: 6, opacity: deckBrowserLoading ? 0.5 : 1 }}>
-                  {deckBrowserLoading ? 'Loading...' : 'Load Cards'}
-                </button>
-              )}
+              {deckBrowserLoading && <span style={{ fontSize: 11, color: '#7d8590' }}>Loading...</span>}
               {deckBrowserNotes.length > 0 && (
                 <input value={deckBrowserSearch} onChange={(e) => setDeckBrowserSearch(e.target.value)}
                   placeholder="Search cards..." style={{ ...S.keyInput, flex: 1, fontSize: 12 }} />
