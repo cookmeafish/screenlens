@@ -6,7 +6,7 @@ import { LANGS } from './config/languages'
 import FormattedText from './components/FormattedText'
 import { S } from './styles/theme'
 import { ocrLog, ocrLogTable, ocrLogFlush } from './utils/logger'
-import { ankiPing, ankiGetDecks, ankiCreateDeck, ankiAddNote, ankiFindCards, ankiCardsInfo, ankiAnswerCards, ankiGetDeckStats, ankiSync } from './utils/anki'
+import { ankiPing, ankiGetDecks, ankiCreateDeck, ankiAddNote, ankiFindCards, ankiCardsInfo, ankiAnswerCards, ankiGetDeckStats, ankiFindNotes, ankiNotesInfo, ankiUpdateNote, ankiDeleteNotes, ankiSync } from './utils/anki'
 
 
 // ─── Image Preprocessing for OCR ────────────────────────────────────────────
@@ -176,6 +176,15 @@ export default function App() {
   const [studyLoading, setStudyLoading] = useState(false)
   const [studyStats, setStudyStats] = useState({ easy: 0, good: 0, hard: 0, again: 0 })
   const [studyDeckStats, setStudyDeckStats] = useState({ new_count: 0, learn_count: 0, review_count: 0 })
+
+  // Deck browser
+  const [deckBrowserActive, setDeckBrowserActive] = useState(false)
+  const [deckBrowserDeck, setDeckBrowserDeck] = useState('')
+  const [deckBrowserNotes, setDeckBrowserNotes] = useState([])
+  const [deckBrowserLoading, setDeckBrowserLoading] = useState(false)
+  const [deckBrowserEditing, setDeckBrowserEditing] = useState(null) // noteId being edited
+  const [deckBrowserEditFields, setDeckBrowserEditFields] = useState({})
+  const [deckBrowserSearch, setDeckBrowserSearch] = useState('')
 
   const activeMode = modes.find((m) => m.id === activeModeId) || modes[0] || defaultMode
   const ankiFormat = activeMode
@@ -1006,6 +1015,69 @@ Output ONLY raw JSON. No markdown, no backticks.`
     setEditingModeName(null)
   }
 
+  // ─── Deck Browser ──────────────────────────────────────────────────────
+  const openDeckBrowser = async () => {
+    if (!ankiConnected) return
+    const decks = await ankiGetDecks().catch(() => [])
+    setAnkiDecks(decks)
+    setDeckBrowserDeck(ankiDeck || decks[0] || '')
+    setDeckBrowserActive(true)
+    setDeckBrowserNotes([])
+  }
+
+  const loadDeckNotes = async (deck) => {
+    setDeckBrowserLoading(true)
+    setDeckBrowserEditing(null)
+    try {
+      const noteIds = await ankiFindNotes(`deck:"${deck}"`)
+      const notes = noteIds.length > 0 ? await ankiNotesInfo(noteIds.slice(0, 100)) : []
+      setDeckBrowserNotes(notes)
+      console.log('[Deck] loaded', notes.length, 'notes from:', deck)
+    } catch (err) {
+      console.error('[Deck] load failed:', err.message)
+    } finally {
+      setDeckBrowserLoading(false)
+    }
+  }
+
+  const startEditNote = (note) => {
+    const fields = {}
+    Object.entries(note.fields).forEach(([name, f]) => { fields[name] = f.value })
+    setDeckBrowserEditing(note.noteId)
+    setDeckBrowserEditFields(fields)
+  }
+
+  const saveEditNote = async (noteId) => {
+    try {
+      await ankiUpdateNote(noteId, deckBrowserEditFields)
+      ankiSync().catch(() => {})
+      // Reload
+      await loadDeckNotes(deckBrowserDeck)
+      setDeckBrowserEditing(null)
+      console.log('[Deck] note updated:', noteId)
+    } catch (err) {
+      console.error('[Deck] update failed:', err.message)
+    }
+  }
+
+  const deleteNote = async (noteId) => {
+    try {
+      await ankiDeleteNotes([noteId])
+      ankiSync().catch(() => {})
+      setDeckBrowserNotes((prev) => prev.filter((n) => n.noteId !== noteId))
+      console.log('[Deck] note deleted:', noteId)
+    } catch (err) {
+      console.error('[Deck] delete failed:', err.message)
+    }
+  }
+
+  const closeDeckBrowser = () => {
+    setDeckBrowserActive(false)
+    setDeckBrowserNotes([])
+    setDeckBrowserEditing(null)
+    setDeckBrowserSearch('')
+  }
+
   // ─── AI Format Editing ───────────────────────────────────────────────────
   const editModeWithAI = async (instruction) => {
     if (!apiKey || modeCreating) return
@@ -1649,14 +1721,23 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
           </div>
 
           {ankiConnected && (
-            <button onClick={startStudySession} disabled={studyLoading} style={{
-              ...S.ghostBtn,
-              color: '#ffa657',
-              borderColor: 'rgba(255,166,87,0.25)',
-              opacity: studyLoading ? 0.5 : 1,
-            }}>
-              {studyLoading ? 'Loading...' : 'Study'}
-            </button>
+            <>
+              <button onClick={startStudySession} disabled={studyLoading} style={{
+                ...S.ghostBtn,
+                color: '#ffa657',
+                borderColor: 'rgba(255,166,87,0.25)',
+                opacity: studyLoading ? 0.5 : 1,
+              }}>
+                {studyLoading ? 'Loading...' : 'Study'}
+              </button>
+              <button onClick={openDeckBrowser} style={{
+                ...S.ghostBtn,
+                color: '#d2a8ff',
+                borderColor: 'rgba(210,168,255,0.25)',
+              }}>
+                Deck
+              </button>
+            </>
           )}
 
           <button onClick={() => setShowKeyInput(!showKeyInput)} style={{
@@ -1910,6 +1991,96 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
         </div>
       )}
 
+      {/* ── Deck Browser ─────────────────────────────────────────────────────── */}
+      {deckBrowserActive && (
+        <main style={{ ...S.main, display: 'flex', flexDirection: 'column', padding: 20 }}>
+          <div style={{ maxWidth: 800, width: '100%', margin: '0 auto' }}>
+            {/* Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <div style={{ fontSize: 16, fontWeight: 700, color: '#e6edf3' }}>Deck Browser</div>
+              <button onClick={closeDeckBrowser} style={{ ...S.ghostBtn, fontSize: 10 }}>Close</button>
+            </div>
+
+            {/* Deck picker + search */}
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+              <select value={deckBrowserDeck} onChange={(e) => { setDeckBrowserDeck(e.target.value); loadDeckNotes(e.target.value) }}
+                style={{ ...S.select, minWidth: 150 }}>
+                <option value="">Select deck...</option>
+                {ankiDecks.map((d) => <option key={d} value={d}>{d}</option>)}
+              </select>
+              {!deckBrowserNotes.length && deckBrowserDeck && (
+                <button onClick={() => loadDeckNotes(deckBrowserDeck)} disabled={deckBrowserLoading}
+                  style={{ ...S.captureBtn, borderRadius: 6, opacity: deckBrowserLoading ? 0.5 : 1 }}>
+                  {deckBrowserLoading ? 'Loading...' : 'Load Cards'}
+                </button>
+              )}
+              {deckBrowserNotes.length > 0 && (
+                <input value={deckBrowserSearch} onChange={(e) => setDeckBrowserSearch(e.target.value)}
+                  placeholder="Search cards..." style={{ ...S.keyInput, flex: 1, fontSize: 12 }} />
+              )}
+              {deckBrowserNotes.length > 0 && (
+                <span style={{ fontSize: 11, color: '#7d8590', alignSelf: 'center' }}>{deckBrowserNotes.length} cards</span>
+              )}
+            </div>
+
+            {/* Card list */}
+            {deckBrowserNotes.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {deckBrowserNotes
+                  .filter((n) => {
+                    if (!deckBrowserSearch) return true
+                    const s = deckBrowserSearch.toLowerCase()
+                    return Object.values(n.fields).some((f) => stripHtml(f.value).toLowerCase().includes(s))
+                  })
+                  .map((note) => {
+                    const fields = Object.entries(note.fields).sort(([,a],[,b]) => a.order - b.order)
+                    const front = stripHtml(fields[0]?.[1]?.value || '')
+                    const back = stripHtml(fields[1]?.[1]?.value || '')
+                    const isEditing = deckBrowserEditing === note.noteId
+
+                    return (
+                      <div key={note.noteId} style={{
+                        border: '1px solid #2a3040', borderRadius: 6, overflow: 'hidden',
+                        background: isEditing ? '#1c2129' : 'transparent',
+                      }}>
+                        {isEditing ? (
+                          <div style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                            {fields.map(([name]) => (
+                              <div key={name}>
+                                <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 3, fontWeight: 600 }}>{name}</div>
+                                <textarea value={deckBrowserEditFields[name] || ''}
+                                  onChange={(e) => setDeckBrowserEditFields((prev) => ({ ...prev, [name]: e.target.value }))}
+                                  style={{ ...S.keyInput, fontSize: 12, minHeight: 50, resize: 'vertical', width: '100%', boxSizing: 'border-box' }}
+                                />
+                              </div>
+                            ))}
+                            <div style={{ display: 'flex', gap: 6 }}>
+                              <button onClick={() => saveEditNote(note.noteId)} style={{ ...S.captureBtn, borderRadius: 5, fontSize: 11, padding: '5px 12px' }}>Save</button>
+                              <button onClick={() => setDeckBrowserEditing(null)} style={{ ...S.ghostBtn, fontSize: 11 }}>Cancel</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div style={{ padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <span style={{ fontSize: 12, fontWeight: 600, color: '#e6edf3' }}>{front}</span>
+                              <span style={{ fontSize: 11, color: '#7d8590', marginLeft: 8 }}>{back.slice(0, 80)}{back.length > 80 ? '...' : ''}</span>
+                            </div>
+                            <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                              <button onClick={() => startEditNote(note)} style={{ ...S.ghostBtn, fontSize: 10, padding: '3px 8px' }}>Edit</button>
+                              <button onClick={() => { if (confirm(`Delete "${front}"?`)) deleteNote(note.noteId) }}
+                                style={{ ...S.ghostBtn, fontSize: 10, padding: '3px 8px', color: '#f85149', borderColor: 'rgba(248,81,73,.25)' }}>Del</button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+              </div>
+            )}
+          </div>
+        </main>
+      )}
+
       {/* ── Study Session ────────────────────────────────────────────────────── */}
       {studyActive && (
         <main style={{ ...S.main, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
@@ -2107,7 +2278,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
       )}
 
       {/* ── Main Content ─────────────────────────────────────────────────────── */}
-      {!studyActive && <main style={S.main}>
+      {!studyActive && !deckBrowserActive && <main style={S.main}>
         {/* Empty state */}
         {stage === 'idle' && (
           <div style={S.emptyState}>

@@ -77,6 +77,26 @@ export async function ankiGetDeckStats(decks) {
   return ankiRequest('getDeckStats', { decks })
 }
 
+export async function ankiFindNotes(query) {
+  ankiLog(`finding notes: ${query}`)
+  return ankiRequest('findNotes', { query })
+}
+
+export async function ankiNotesInfo(notes) {
+  ankiLog(`getting info for ${notes.length} notes`)
+  return ankiRequest('notesInfo', { notes })
+}
+
+export async function ankiUpdateNote(id, fields) {
+  ankiLog(`updating note ${id}`, fields)
+  return ankiRequest('updateNoteFields', { note: { id, fields } })
+}
+
+export async function ankiDeleteNotes(notes) {
+  ankiLog(`deleting ${notes.length} notes`, notes)
+  return ankiRequest('deleteNotes', { notes })
+}
+
 export async function ankiSync() {
   ankiLog('triggering sync to AnkiWeb...')
   await ankiRequest('sync')
