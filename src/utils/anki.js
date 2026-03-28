@@ -54,3 +54,20 @@ export async function ankiAddNote(deckName, front, back, tags = []) {
   ankiLog(`note added, id: ${noteId}`)
   return noteId
 }
+
+export async function ankiFindCards(query) {
+  ankiLog(`finding cards: ${query}`)
+  const cards = await ankiRequest('findCards', { query })
+  ankiLog(`found ${cards.length} cards`)
+  return cards
+}
+
+export async function ankiCardsInfo(cards) {
+  ankiLog(`getting info for ${cards.length} cards`)
+  return ankiRequest('cardsInfo', { cards })
+}
+
+export async function ankiAnswerCards(answers) {
+  ankiLog(`answering ${answers.length} cards`, answers)
+  return ankiRequest('answerCards', { answers })
+}
