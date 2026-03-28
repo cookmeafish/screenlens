@@ -7,8 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "overlay": "electron electron/main.js",
-    "overlay:dev": "electron electron/main.js --dev"
+    "overlay": "electron electron/main.cjs",
+    "overlay:dev": "electron electron/main.cjs --dev"
   },
   "dependencies": {
     "react": "^18.3.1",
@@ -22,6 +22,6 @@
     "vite": "^6.0.0"
   },
   "optionalDependencies": {
-    "electron": "^33.0.0"
+    "electron": "^33.4.11"
   }
 }

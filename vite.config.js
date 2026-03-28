@@ -373,7 +373,7 @@ function apiPlugin() {
             return
           }
           try {
-            overlayProcess = spawn(process.execPath, [electronCli, path.resolve('electron/main.js')], {
+            overlayProcess = spawn(process.execPath, [electronCli, path.resolve('electron/main.cjs')], {
               stdio: 'inherit', detached: false,
             })
             overlayProcess.on('exit', () => { overlayProcess = null })
