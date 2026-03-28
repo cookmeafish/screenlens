@@ -1909,11 +1909,22 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
             </button>
           </div>
 
-          <button onClick={() => {
-            fetch('/api/launch-overlay', { method: 'POST' })
-              .then(r => r.json())
-              .then(d => { if (d.error) alert(d.error); else console.log('[Overlay] launched') })
-              .catch(() => alert('Failed to launch overlay. Make sure Electron is installed: npm install electron --save-optional'))
+          <button onClick={async () => {
+            console.log('[Overlay] launching...')
+            try {
+              const r = await fetch('/api/launch-overlay', { method: 'POST' })
+              console.log('[Overlay] response status:', r.status)
+              const text = await r.text()
+              console.log('[Overlay] response body:', text)
+              try {
+                const d = JSON.parse(text)
+                if (d.error) { alert(d.error) }
+                else { alert(`Overlay ${d.status}! Press Ctrl+Shift+S in any app to capture.`) }
+              } catch { alert('Unexpected response: ' + text.substring(0, 200)) }
+            } catch (err) {
+              console.error('[Overlay] fetch failed:', err)
+              alert('Failed to launch overlay: ' + err.message)
+            }
           }} style={{ ...S.ghostBtn, color: '#d2a8ff', borderColor: 'rgba(210,168,255,0.25)' }}>
             Overlay
           </button>

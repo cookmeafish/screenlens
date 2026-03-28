@@ -361,23 +361,29 @@ function apiPlugin() {
       // Launch overlay endpoint
       let overlayProcess = null
       server.middlewares.use('/api/launch-overlay', (req, res) => {
+        console.log('[Overlay API] request:', req.method, req.url)
         if (req.method === 'POST') {
           res.setHeader('Content-Type', 'application/json')
           if (overlayProcess && !overlayProcess.killed) {
+            console.log('[Overlay API] already running')
             res.end(JSON.stringify({ ok: true, status: 'already running' }))
             return
           }
           const electronCli = path.resolve('node_modules/electron/cli.js')
+          console.log('[Overlay API] electron cli path:', electronCli, 'exists:', fs.existsSync(electronCli))
           if (!fs.existsSync(electronCli)) {
             res.end(JSON.stringify({ error: 'Electron not installed. Run: npm install electron --save-optional' }))
             return
           }
           try {
-            overlayProcess = spawn(process.execPath, [electronCli, path.resolve('electron/main.cjs')], {
+            const mainScript = path.resolve('electron/main.cjs')
+            console.log('[Overlay API] spawning:', process.execPath, electronCli, mainScript)
+            overlayProcess = spawn(process.execPath, [electronCli, mainScript], {
               stdio: 'inherit', detached: false,
             })
-            overlayProcess.on('exit', () => { overlayProcess = null })
-            console.log('[Overlay] Electron process launched')
+            overlayProcess.on('exit', (code) => { console.log('[Overlay API] process exited, code:', code); overlayProcess = null })
+            overlayProcess.on('error', (err) => { console.error('[Overlay API] process error:', err.message); overlayProcess = null })
+            console.log('[Overlay API] Electron process launched, pid:', overlayProcess.pid)
             res.end(JSON.stringify({ ok: true, status: 'launched' }))
           } catch (e) {
             console.error('[Overlay] Launch failed:', e.message)
