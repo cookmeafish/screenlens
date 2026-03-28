@@ -87,11 +87,36 @@ ScreenLens can create flashcards and sync them directly to [Anki](https://apps.a
 
 If Anki is not running, cards can still be generated and previewed — a warning will appear when you try to sync. The deck selector in the header lets you choose which Anki deck to send cards to.
 
+## Overlay Mode (Optional)
+
+ScreenLens includes an optional transparent overlay that sits on top of games and apps for real-time translation.
+
+### Setup
+
+```bash
+# Install Electron (optional — only needed for overlay)
+npm install electron --save-optional
+```
+
+### Usage
+
+1. Start the web app: `npm run dev`
+2. In a separate terminal, start the overlay: `npm run overlay`
+3. Switch to your game (borderless windowed mode recommended)
+4. Press **Ctrl+Shift+S** — screen is captured and translated words appear as an overlay
+5. Hover words to see translations
+6. Press **ESC** to dismiss the overlay
+
+The overlay connects to the same Vite server, sharing your API keys, modes, and Anki connection. The web app works independently — the overlay is purely optional.
+
+**Note:** Fullscreen exclusive games may not work with overlays. Use borderless windowed mode.
+
 ## Requirements
 
 - Node.js 18+
 - API key for at least one supported provider
 - Chrome/Edge/Brave recommended (Firefox works but screen capture may be limited)
+- Electron (optional, for overlay mode only)
 
 ## Usage with Claude Code
 
