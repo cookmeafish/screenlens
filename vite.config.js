@@ -178,38 +178,59 @@ function apiPlugin() {
         }
       })
 
-      // Modes endpoint — per-mode folders in modes/ directory
-      // Each mode: modes/<id>/config.json
+      // Modes endpoint — per-mode named folders in modes/ directory
+      // Each mode: modes/<sanitized-name>/config.json
       // Meta: modes/_meta.json
-      // GET /api/modes → list all modes
-      // POST /api/modes → save all modes
       server.middlewares.use('/api/modes', (req, res) => {
         if (!fs.existsSync(MODES_DIR)) fs.mkdirSync(MODES_DIR, { recursive: true })
         const metaFile = path.join(MODES_DIR, '_meta.json')
 
-        const getModeDir = (id) => path.join(MODES_DIR, String(id))
-        const getModeFile = (id) => path.join(getModeDir(id), 'config.json')
+        // Sanitize mode name for folder: remove invalid chars, trim, fallback to id
+        const sanitizeName = (name, id) => {
+          const clean = (name || '').replace(/[<>:"/\\|?*]/g, '').replace(/\s+/g, ' ').trim()
+          return clean || `mode-${id}`
+        }
 
         if (req.method === 'GET') {
           res.setHeader('Content-Type', 'application/json')
           try {
             const meta = fs.existsSync(metaFile) ? JSON.parse(fs.readFileSync(metaFile, 'utf-8')) : {}
-            const dirs = fs.readdirSync(MODES_DIR).filter((d) => {
-              const full = path.join(MODES_DIR, d)
-              return fs.statSync(full).isDirectory() && fs.existsSync(path.join(full, 'config.json'))
-            })
-            // Also check for legacy flat files and migrate them
-            const legacyFiles = fs.readdirSync(MODES_DIR).filter((f) => f.match(/^\d+\.json$/))
-            for (const f of legacyFiles) {
-              const id = f.replace('.json', '')
-              const dir = getModeDir(id)
-              if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-              fs.renameSync(path.join(MODES_DIR, f), getModeFile(id))
+
+            // Migrate legacy numbered folders/files
+            const entries = fs.readdirSync(MODES_DIR)
+            for (const entry of entries) {
+              const full = path.join(MODES_DIR, entry)
+              // Legacy flat file: 1.json → read, create named folder
+              if (entry.match(/^\d+\.json$/)) {
+                try {
+                  const mode = JSON.parse(fs.readFileSync(full, 'utf-8'))
+                  const folderName = sanitizeName(mode.name, mode.id)
+                  const newDir = path.join(MODES_DIR, folderName)
+                  if (!fs.existsSync(newDir)) fs.mkdirSync(newDir, { recursive: true })
+                  fs.writeFileSync(path.join(newDir, 'config.json'), JSON.stringify(mode, null, 2), 'utf-8')
+                  fs.unlinkSync(full)
+                } catch {}
+              }
+              // Legacy numbered folder: 1/ → read config, rename to named folder
+              if (entry.match(/^\d+$/) && fs.statSync(full).isDirectory()) {
+                const cfgFile = path.join(full, 'config.json')
+                if (fs.existsSync(cfgFile)) {
+                  try {
+                    const mode = JSON.parse(fs.readFileSync(cfgFile, 'utf-8'))
+                    const folderName = sanitizeName(mode.name, mode.id)
+                    if (folderName !== entry) {
+                      const newDir = path.join(MODES_DIR, folderName)
+                      if (!fs.existsSync(newDir)) fs.renameSync(full, newDir)
+                    }
+                  } catch {}
+                }
+              }
             }
 
+            // Read all mode folders
             const allDirs = fs.readdirSync(MODES_DIR).filter((d) => {
               const full = path.join(MODES_DIR, d)
-              return fs.statSync(full).isDirectory() && fs.existsSync(path.join(full, 'config.json'))
+              return d !== '_meta.json' && fs.statSync(full).isDirectory() && fs.existsSync(path.join(full, 'config.json'))
             })
             const modes = allDirs.map((d) => {
               try { return JSON.parse(fs.readFileSync(path.join(MODES_DIR, d, 'config.json'), 'utf-8')) } catch { return null }
@@ -221,18 +242,19 @@ function apiPlugin() {
             try {
               const data = JSON.parse(bodyStr)
               if (data.modes) {
-                // Save each mode to its own folder
-                const activeIds = new Set()
+                // Track which folders should exist
+                const activeFolders = new Set(['_meta.json'])
                 for (const mode of data.modes) {
-                  activeIds.add(String(mode.id))
-                  const dir = getModeDir(mode.id)
+                  const folderName = sanitizeName(mode.name, mode.id)
+                  activeFolders.add(folderName)
+                  const dir = path.join(MODES_DIR, folderName)
                   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-                  fs.writeFileSync(getModeFile(mode.id), JSON.stringify(mode, null, 2), 'utf-8')
+                  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify(mode, null, 2), 'utf-8')
                 }
-                // Remove deleted mode folders
+                // Remove folders for deleted/renamed modes
                 fs.readdirSync(MODES_DIR).forEach((d) => {
                   const full = path.join(MODES_DIR, d)
-                  if (fs.statSync(full).isDirectory() && !activeIds.has(d)) {
+                  if (fs.statSync(full).isDirectory() && !activeFolders.has(d)) {
                     fs.rmSync(full, { recursive: true, force: true })
                   }
                 })
