@@ -1032,7 +1032,7 @@ Output ONLY raw JSON. No markdown, no backticks.`
     setDeckBrowserEditing(null)
     try {
       const noteIds = await ankiFindNotes(`deck:"${deck}"`)
-      const notes = noteIds.length > 0 ? await ankiNotesInfo(noteIds.slice(0, 100)) : []
+      const notes = noteIds.length > 0 ? await ankiNotesInfo(noteIds) : []
       setDeckBrowserNotes(notes)
       console.log('[Deck] loaded', notes.length, 'notes from:', deck)
     } catch (err) {

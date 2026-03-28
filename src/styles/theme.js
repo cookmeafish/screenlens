@@ -1,6 +1,6 @@
 export const S = {
   app: {
-    minHeight: '100vh', background: '#0e1117', color: '#e6edf3',
+    height: '100vh', background: '#0e1117', color: '#e6edf3',
     fontFamily: "'JetBrains Mono', 'SF Mono', 'Fira Code', monospace",
     display: 'flex', flexDirection: 'column', position: 'relative',
   },
