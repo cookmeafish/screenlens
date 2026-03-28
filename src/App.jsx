@@ -162,21 +162,35 @@ export default function App() {
     Promise.all([
       fetch('/api/keys').then((r) => r.json()).catch(() => ({})),
       fetch('/api/config').then((r) => r.json()).catch(() => ({})),
+      fetch('/api/modes').then((r) => r.json()).catch(() => null),
       fetch('/api/ankiformat').then((r) => r.json()).catch(() => null),
-    ]).then(([keys, config, format]) => {
-      if (format) {
-        if (format.modes) {
-          setModes(format.modes)
-          if (format.activeModeId) setActiveModeId(format.activeModeId)
-        } else if (format.profiles) {
-          // Migrate profiles → modes
-          const migrated = format.profiles.map((p) => ({
+    ]).then(([keys, config, modesData, legacyFormat]) => {
+      // Load modes from /api/modes (per-file storage)
+      if (modesData && modesData.modes && modesData.modes.length > 0) {
+        setModes(modesData.modes)
+        if (modesData.activeModeId) setActiveModeId(modesData.activeModeId)
+      } else if (legacyFormat) {
+        // Migrate from legacy ankiformat.json
+        let migrated = null
+        if (legacyFormat.modes) {
+          migrated = legacyFormat.modes
+          if (legacyFormat.activeModeId) setActiveModeId(legacyFormat.activeModeId)
+        } else if (legacyFormat.profiles) {
+          migrated = legacyFormat.profiles.map((p) => ({
             ...p, type: 'language', description: '', tagRules: defaultMode.tagRules,
           }))
+          if (legacyFormat.activeProfileId) setActiveModeId(legacyFormat.activeProfileId)
+        } else if (legacyFormat.fields) {
+          migrated = [{ ...defaultMode, ...legacyFormat, id: 1, name: 'Language Learning', type: 'language' }]
+        }
+        if (migrated) {
           setModes(migrated)
-          if (format.activeProfileId) setActiveModeId(format.activeProfileId)
-        } else if (format.fields) {
-          setModes([{ ...defaultMode, ...format, id: 1, name: 'Language Learning', type: 'language' }])
+          // Save to new format
+          fetch('/api/modes', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ modes: migrated, activeModeId: migrated[0]?.id || 1 }),
+          }).catch(() => {})
+          console.log('[Mode] migrated from legacy ankiformat.json')
         }
       }
       setApiKeys(keys)
@@ -933,7 +947,7 @@ Output ONLY raw JSON. No markdown, no backticks.`
     setModes(modeList)
     setActiveModeId(id)
     const payload = { modes: modeList, activeModeId: id }
-    fetch('/api/ankiformat', {
+    fetch('/api/modes', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -1385,12 +1399,25 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
             ))}
           </select>
 
-          <button onClick={() => setShowModePanel(!showModePanel)} style={{
-            ...S.ghostBtn, color: '#58a6ff', borderColor: 'rgba(88,166,255,0.25)',
-          }}>
-            {activeMode.type === 'language' ? '\u{1F310}' : '\u{1F4DA}'} {activeMode.name}
-          </button>
-
+          <div style={{ display: 'flex', gap: 0 }}>
+            <button onClick={() => { setShowModePanel(!showModePanel); if (showModePanel) setModeSettingsTab(null) }} style={{
+              ...S.ghostBtn, color: '#58a6ff', borderColor: 'rgba(88,166,255,0.25)',
+              borderRadius: '6px 0 0 6px', borderRight: 'none',
+            }}>
+              {activeMode.type === 'language' ? '\u{1F310}' : '\u{1F4DA}'} {activeMode.name}
+            </button>
+            <button onClick={() => {
+              if (modeSettingsTab) { setModeSettingsTab(null) }
+              else { setShowModePanel(true); setModeSettingsTab('format') }
+            }} style={{
+              ...S.ghostBtn, borderRadius: '0 6px 6px 0',
+              color: modeSettingsTab ? '#e6edf3' : '#7d8590',
+              borderColor: modeSettingsTab ? 'rgba(230,237,243,0.2)' : 'rgba(88,166,255,0.25)',
+              padding: '6px 8px',
+            }}>
+              {'\u2699\uFE0F'}
+            </button>
+          </div>
 
           <button onClick={() => setShowKeyInput(!showKeyInput)} style={{
             ...S.ghostBtn,
@@ -1502,18 +1529,8 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
             </button>
           </div>
 
-          {/* Settings toggle + Done */}
+          {/* Done button */}
           <div style={{ display: 'flex', gap: 8 }}>
-            <button
-              onClick={() => setModeSettingsTab(modeSettingsTab ? null : 'format')}
-              style={{
-                ...S.ghostBtn,
-                color: modeSettingsTab ? '#e6edf3' : '#7d8590',
-                borderColor: modeSettingsTab ? 'rgba(230,237,243,0.2)' : '#2a3040',
-              }}
-            >
-              {modeSettingsTab ? '\u25BC' : '\u2699\uFE0F'} Settings
-            </button>
             <button onClick={() => { setShowModePanel(false); setModeSettingsTab(null) }} style={S.keyDone}>Done</button>
           </div>
 
