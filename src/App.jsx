@@ -1502,28 +1502,43 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
             </button>
           </div>
 
-          {/* Settings tabs */}
-          <div style={{ display: 'flex', gap: 6 }}>
-            {[
-              { key: 'format', label: 'Card Format', color: '#d2a8ff', bg: 'rgba(210,168,255,' },
-              { key: 'tags', label: 'Tag Rules', color: '#7ee787', bg: 'rgba(126,231,135,' },
-              { key: 'anki', label: `Anki ${ankiConnected ? '' : ankiConnected === false ? '(offline)' : ''}`, color: '#58a6ff', bg: 'rgba(88,166,255,' },
-            ].map(({ key, label, color, bg }) => (
-              <button key={key}
-                onClick={() => setModeSettingsTab(modeSettingsTab === key ? null : key)}
-                style={{
-                  padding: '4px 10px', borderRadius: 5, fontSize: 10, fontFamily: 'inherit', cursor: 'pointer',
-                  background: modeSettingsTab === key ? `${bg}.2)` : `${bg}.08)`,
-                  color, border: `1px solid ${bg}${modeSettingsTab === key ? '.4)' : '.2)'}`,
-                  fontWeight: modeSettingsTab === key ? 700 : 400,
-                }}
-              >
-                {modeSettingsTab === key ? '\u25BC' : '\u25B6'} {label}
-              </button>
-            ))}
-            <div style={{ flex: 1 }} />
+          {/* Settings toggle + Done */}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              onClick={() => setModeSettingsTab(modeSettingsTab ? null : 'format')}
+              style={{
+                ...S.ghostBtn,
+                color: modeSettingsTab ? '#e6edf3' : '#7d8590',
+                borderColor: modeSettingsTab ? 'rgba(230,237,243,0.2)' : '#2a3040',
+              }}
+            >
+              {modeSettingsTab ? '\u25BC' : '\u2699\uFE0F'} Settings
+            </button>
             <button onClick={() => { setShowModePanel(false); setModeSettingsTab(null) }} style={S.keyDone}>Done</button>
           </div>
+
+          {/* Settings sub-tabs */}
+          {modeSettingsTab && (
+            <div style={{ display: 'flex', gap: 6, borderTop: '1px solid #2a3040', paddingTop: 8 }}>
+              {[
+                { key: 'format', label: 'Card Format', color: '#d2a8ff', bg: 'rgba(210,168,255,' },
+                { key: 'tags', label: 'Tag Rules', color: '#7ee787', bg: 'rgba(126,231,135,' },
+                { key: 'anki', label: `Anki ${ankiConnected ? '' : ankiConnected === false ? '(offline)' : ''}`, color: '#58a6ff', bg: 'rgba(88,166,255,' },
+              ].map(({ key, label, color, bg }) => (
+                <button key={key}
+                  onClick={() => setModeSettingsTab(key)}
+                  style={{
+                    padding: '5px 12px', borderRadius: 5, fontSize: 11, fontFamily: 'inherit', cursor: 'pointer',
+                    background: modeSettingsTab === key ? `${bg}.2)` : `${bg}.06)`,
+                    color, border: `1px solid ${bg}${modeSettingsTab === key ? '.4)' : '.15)'}`,
+                    fontWeight: modeSettingsTab === key ? 700 : 400,
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* Card Format tab */}
           {modeSettingsTab === 'format' && (
