@@ -2193,20 +2193,34 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
             {studyPhase === 'pick' && (
               <div style={{ textAlign: 'center' }}>
                 <div style={{ fontSize: 20, fontWeight: 700, color: '#e6edf3', marginBottom: 8 }}>Study Session</div>
-                <div style={{ fontSize: 12, color: '#7d8590', marginBottom: 20 }}>
-                  Mode: <strong style={{ color: '#58a6ff' }}>{activeMode.name}</strong>
-                </div>
-
-                {/* Current deck display */}
-                <div style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 10, padding: '12px 20px',
-                  background: '#1c2129', border: '1px solid #2a3040', borderRadius: 8, marginBottom: 16,
-                }}>
-                  <span style={{ fontSize: 12, color: '#7d8590' }}>Deck:</span>
-                  <select value={studyDeck} onChange={(e) => { setStudyDeck(e.target.value); setAnkiDeck(e.target.value) }}
-                    style={{ ...S.select, fontSize: 12, padding: '6px 10px' }}>
-                    {ankiDecks.map((d) => <option key={d} value={d}>{d}</option>)}
-                  </select>
+                {/* Mode & Deck selectors */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center', marginBottom: 16 }}>
+                  <div style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 10, padding: '10px 20px',
+                    background: '#1c2129', border: '1px solid #2a3040', borderRadius: 8,
+                  }}>
+                    <span style={{ fontSize: 12, color: '#7d8590' }}>Mode:</span>
+                    <select value={activeModeId} onChange={(e) => {
+                      const id = parseInt(e.target.value)
+                      setActiveModeId(id)
+                      saveModes(modes, id)
+                      // Load new mode's deck
+                      const newMode = modes.find((m) => m.id === id)
+                      if (newMode?.ankiDeck) setStudyDeck(newMode.ankiDeck)
+                    }} style={{ ...S.select, fontSize: 12, padding: '6px 10px', color: '#58a6ff', borderColor: 'rgba(88,166,255,.3)' }}>
+                      {modes.map((m) => <option key={m.id} value={m.id}>{m.type === 'language' ? '\u{1F310}' : '\u{1F4DA}'} {m.name}</option>)}
+                    </select>
+                  </div>
+                  <div style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 10, padding: '10px 20px',
+                    background: '#1c2129', border: '1px solid #2a3040', borderRadius: 8,
+                  }}>
+                    <span style={{ fontSize: 12, color: '#7d8590' }}>Deck:</span>
+                    <select value={studyDeck} onChange={(e) => { setStudyDeck(e.target.value); setAnkiDeck(e.target.value) }}
+                      style={{ ...S.select, fontSize: 12, padding: '6px 10px' }}>
+                      {ankiDecks.map((d) => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                  </div>
                 </div>
 
                 {/* Language & grammar options */}
