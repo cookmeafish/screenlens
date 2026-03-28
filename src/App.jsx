@@ -130,7 +130,14 @@ export default function App() {
   const [ankiSynced, setAnkiSynced] = useState({})
   const [ankiSyncing, setAnkiSyncing] = useState(false)
   const [ankiError, setAnkiError] = useState(null)
+  const [ankiGenerating, setAnkiGenerating] = useState(false)
   const [showAnkiSettings, setShowAnkiSettings] = useState(false)
+  const [ankiFormat, setAnkiFormat] = useState({
+    fields: { pronunciation: true, translation: true, synonyms: true, definition: true, example: true },
+    frontTemplate: '{word} ({partOfSpeech})',
+    backTemplate: 'Pronunciación: {pronunciation}\nTraducción: {translation}\nSinónimos: {synonyms}\nDefinición: {definition}\nEjemplo: {example}',
+  })
+  const [showAnkiFormatEditor, setShowAnkiFormatEditor] = useState(false)
 
   const fileInputRef = useRef(null)
   const containerRef = useRef(null)
@@ -143,7 +150,9 @@ export default function App() {
     Promise.all([
       fetch('/api/keys').then((r) => r.json()).catch(() => ({})),
       fetch('/api/config').then((r) => r.json()).catch(() => ({})),
-    ]).then(([keys, config]) => {
+      fetch('/api/ankiformat').then((r) => r.json()).catch(() => null),
+    ]).then(([keys, config, format]) => {
+      if (format && format.fields) setAnkiFormat(format)
       setApiKeys(keys)
       if (config.provider) setProvider(config.provider)
       if (config.language) setLanguage(config.language)
@@ -803,19 +812,77 @@ In 1-2 short sentences: what does "${word.text}" mean here and what part of spee
     }
   }
 
-  const generateAnkiCard = (word) => {
-    const front = word.pronunciation
-      ? `${word.text} (${word.pronunciation})`
-      : word.text
-    const backParts = [word.translation]
-    if (word.synonyms?.length) backParts.push(`Synonyms: ${word.synonyms.join(', ')}`)
-    if (word.partOfSpeech) backParts.push(`(${word.partOfSpeech})`)
-    const back = backParts.join('\n')
-    const langLabel = LANGS.find((l) => l.code === language)?.label || language
-    const tags = ['screenlens', langLabel.toLowerCase()]
-    console.log('[Anki] card generated', { front, back, tags })
-    setAnkiCard({ front, back, tags })
+  const generateAnkiCard = async (word) => {
+    if (!apiKey || ankiGenerating) return
+    setAnkiGenerating(true)
     setAnkiError(null)
+    setAnkiCard(null)
+    const srcLang = LANGS.find((l) => l.code === language)?.label || 'the source language'
+    const tgtLang = LANGS.find((l) => l.code === targetLang)?.label || 'English'
+    const context = ocrWords.map((w) => w.text).join(' ')
+    const fmt = ankiFormat
+
+    // Build the AI prompt based on which fields are enabled
+    const fieldRequests = []
+    if (fmt.fields.pronunciation) fieldRequests.push(`"pronunciation": pronunciation guide in English phonetics (e.g. "KAH-lee-do"), include gender variants if applicable`)
+    if (fmt.fields.translation) fieldRequests.push(`"translation": translation to ${tgtLang}`)
+    if (fmt.fields.synonyms) fieldRequests.push(`"synonyms": comma-separated synonyms in ${tgtLang}, grouped by meaning if multiple`)
+    if (fmt.fields.definition) fieldRequests.push(`"definition": definition in ${srcLang} (the source language, not ${tgtLang})`)
+    if (fmt.fields.example) fieldRequests.push(`"example": example sentence in ${srcLang} using the word in context, followed by (${tgtLang} translation in parentheses)`)
+
+    const prompt = `Generate an Anki flashcard for the word "${word.text}" (${word.partOfSpeech || 'unknown'}).
+Source language: ${srcLang}
+Translation: ${word.translation}
+Context: "${context}"
+
+Return a JSON object with these fields:
+${fieldRequests.map((f) => `- ${f}`).join('\n')}
+
+Output ONLY raw JSON. No markdown, no backticks.`
+
+    try {
+      console.log('[Anki] generating card with AI...')
+      const text = await providerConfig.call(apiKey, 'You generate Anki flashcard content. Always respond with valid JSON only.', prompt)
+      const cardData = JSON.parse(text.trim().replace(/^```json?\s*/i, '').replace(/```\s*$/, ''))
+      console.log('[Anki] AI card data:', cardData)
+
+      // Build front from template
+      const front = fmt.frontTemplate
+        .replace('{word}', word.text)
+        .replace('{partOfSpeech}', word.partOfSpeech || '')
+        .replace('{pronunciation}', cardData.pronunciation || word.pronunciation || '')
+        .replace('{translation}', cardData.translation || word.translation || '')
+
+      // Build back from template
+      const back = fmt.backTemplate
+        .replace('{pronunciation}', cardData.pronunciation || word.pronunciation || '')
+        .replace('{translation}', cardData.translation || word.translation || '')
+        .replace('{synonyms}', cardData.synonyms || word.synonyms?.join(', ') || '')
+        .replace('{definition}', cardData.definition || '')
+        .replace('{example}', cardData.example || '')
+        .replace('{word}', word.text)
+        .replace('{partOfSpeech}', word.partOfSpeech || '')
+
+      const langTag = (LANGS.find((l) => l.code === language)?.label || language).toLowerCase()
+      const tags = ['screenlens', langTag]
+      console.log('[Anki] card generated', { front, back, tags })
+      setAnkiCard({ front, back, tags })
+    } catch (err) {
+      console.error('[Anki] card generation failed:', err.message)
+      setAnkiError('Card generation failed: ' + err.message)
+    } finally {
+      setAnkiGenerating(false)
+    }
+  }
+
+  const saveAnkiFormat = (newFormat) => {
+    setAnkiFormat(newFormat)
+    fetch('/api/ankiformat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newFormat),
+    }).catch(() => {})
+    console.log('[Anki] format saved', newFormat)
   }
 
   const syncToAnki = async (idx) => {
@@ -1244,10 +1311,56 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
           <button onClick={refreshAnkiConnection} style={S.getKeyLink}>
             {ankiConnected === null ? 'Checking...' : 'Refresh'}
           </button>
+          <button onClick={() => setShowAnkiFormatEditor(!showAnkiFormatEditor)} style={{ ...S.getKeyLink, background: 'rgba(210,168,255,.12)', color: '#d2a8ff', borderColor: 'rgba(210,168,255,.25)' }}>
+            Card Format
+          </button>
           <button onClick={() => setShowAnkiSettings(false)} style={S.keyDone}>Done</button>
           <span style={{ fontSize: 11, color: '#7d8590' }}>
             Requires Anki with AnkiConnect addon (code: 2055492159)
           </span>
+        </div>
+      )}
+      {showAnkiFormatEditor && showAnkiSettings && (
+        <div style={{ ...S.keyBar, flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#d2a8ff' }}>Card Format Settings</div>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            {Object.entries(ankiFormat.fields).map(([field, enabled]) => (
+              <label key={field} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: enabled ? '#e6edf3' : '#7d8590', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={enabled}
+                  onChange={() => {
+                    const updated = { ...ankiFormat, fields: { ...ankiFormat.fields, [field]: !enabled } }
+                    saveAnkiFormat(updated)
+                  }}
+                />
+                {field}
+              </label>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 4 }}>Front template</div>
+              <input
+                value={ankiFormat.frontTemplate}
+                onChange={(e) => saveAnkiFormat({ ...ankiFormat, frontTemplate: e.target.value })}
+                style={{ ...S.keyInput, fontSize: 11 }}
+                placeholder="{word} ({partOfSpeech})"
+              />
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 4 }}>Back template (use \n for newlines)</div>
+            <textarea
+              value={ankiFormat.backTemplate}
+              onChange={(e) => saveAnkiFormat({ ...ankiFormat, backTemplate: e.target.value })}
+              style={{ ...S.keyInput, fontSize: 11, minHeight: 80, resize: 'vertical' }}
+              placeholder="Pronunciación: {pronunciation}\nTraducción: {translation}"
+            />
+          </div>
+          <div style={{ fontSize: 10, color: '#7d8590' }}>
+            Available: {'{word}'} {'{partOfSpeech}'} {'{pronunciation}'} {'{translation}'} {'{synonyms}'} {'{definition}'} {'{example}'}
+          </div>
         </div>
       )}
 
@@ -1484,9 +1597,10 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                 {!ankiCard && !ankiSynced[activeIdx] && (
                   <button
                     onClick={() => generateAnkiCard(activeWord)}
-                    style={S.ttAnkiBtn}
+                    disabled={ankiGenerating}
+                    style={{ ...S.ttAnkiBtn, opacity: ankiGenerating ? 0.5 : 1 }}
                   >
-                    Generate Anki Card
+                    {ankiGenerating ? 'Generating...' : 'Generate Anki Card'}
                   </button>
                 )}
               </div>
@@ -1532,6 +1646,14 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                       {conjugationLoading ? 'Loading...' : 'Conjugate'}
                     </button>
                   )}
+                </div>
+              )}
+
+              {/* Anki generating spinner */}
+              {ankiGenerating && (
+                <div style={S.ttExplaining}>
+                  <div style={S.ttExplainingDot} />
+                  Generating Anki card...
                 </div>
               )}
 

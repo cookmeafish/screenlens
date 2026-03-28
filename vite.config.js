@@ -6,6 +6,7 @@ import http from 'http'
 
 const ENV_FILE = path.resolve('.env')
 const CONFIG_FILE = path.resolve('config.json')
+const ANKI_FORMAT_FILE = path.resolve('ankiformat.json')
 const LOG_DIR = path.resolve('logs')
 
 function parseEnv() {
@@ -142,6 +143,40 @@ function apiPlugin() {
         }
       })
 
+      // Anki format endpoint
+      server.middlewares.use('/api/ankiformat', (req, res) => {
+        if (req.method === 'GET') {
+          res.setHeader('Content-Type', 'application/json')
+          try {
+            const data = fs.existsSync(ANKI_FORMAT_FILE)
+              ? fs.readFileSync(ANKI_FORMAT_FILE, 'utf-8')
+              : '{}'
+            res.end(data)
+          } catch { res.end('{}') }
+        } else if (req.method === 'POST') {
+          const handleBody = (bodyStr) => {
+            try {
+              fs.writeFileSync(ANKI_FORMAT_FILE, bodyStr, 'utf-8')
+              res.setHeader('Content-Type', 'application/json')
+              res.end('{"ok":true}')
+            } catch {
+              res.statusCode = 400
+              res.end('{"error":"invalid json"}')
+            }
+          }
+          if (req.body) {
+            handleBody(typeof req.body === 'string' ? req.body : JSON.stringify(req.body))
+          } else {
+            let body = ''
+            req.on('data', (chunk) => { body += chunk })
+            req.on('end', () => handleBody(body))
+          }
+        } else {
+          res.statusCode = 405
+          res.end('')
+        }
+      })
+
       // Config endpoint
       server.middlewares.use('/api/config', (req, res) => {
         if (req.method === 'GET') {
@@ -174,6 +209,6 @@ export default defineConfig({
   server: {
     port: 3000,
     open: true,
-    watch: { ignored: ['**/.env', '**/config.json'] },
+    watch: { ignored: ['**/.env', '**/config.json', '**/ankiformat.json'] },
   },
 })

@@ -3,5 +3,6 @@ dist
 .env
 .env.local
 config.json
+ankiformat.json
 logs/
 .claude/
