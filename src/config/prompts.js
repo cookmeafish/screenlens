@@ -1,4 +1,4 @@
-export const TRANSLATE_PROMPT = `Translate words from one language to another. Classify each word by category and part of speech.
+export const TRANSLATE_PROMPT = `Translate words from one language to another. Classify each word by category and part of speech. Detect OCR fragments.
 
 You receive JSON: {"words": [{"i":0,"w":"word1"},...], "from": "Spanish", "to": "English", "context": "..."}
 
@@ -11,6 +11,10 @@ Return a JSON array. For each input word, return an object:
 - "p": part of speech — one of: "noun", "verb", "adj", "adv", "prep", "art", "conj", "pron", "other"
 - "r": approximate pronunciation guide for the original word (e.g. "kreh-EE-ahn" for "creían"). Use simple English phonetics.
 
+OCR FRAGMENT DETECTION: The input comes from OCR which sometimes splits one word into fragments (e.g. "Sobre" + "guardia" = "Sobreguardia", or "Hab" + "ilidad" = "Habilidad"). If you detect that consecutive words are fragments of a single word, add "m" (merge) to the FIRST fragment's object:
+- "m": array of indices to merge together (e.g. [3,4] means words at index 3 and 4 are one word)
+Only the first fragment gets "m". The other fragments should still be returned normally but will be merged.
+
 CRITICAL: Every output object MUST include "i" and "w" copied exactly from the input. Always return valid JSON array. Never add commentary.
 
 Words with punctuation attached (e.g. "púas,") — translate the word part, ignore punctuation.
@@ -19,7 +23,11 @@ Output ONLY the raw JSON array. No markdown, no backticks, no explanation.
 
 Example:
 Input: {"words":[{"i":0,"w":"Aventura"},{"i":1,"w":"en"},{"i":2,"w":"Naramon"}],"from":"Spanish","to":"English","context":"Aventura en Naramon"}
-Output: [{"i":0,"w":"Aventura","t":"Adventure","s":["quest","journey"],"c":"foreign","p":"noun","r":"ah-ven-TOO-rah"},{"i":1,"w":"en","t":"in","s":[],"c":"foreign","p":"prep","r":"en"},{"i":2,"w":"Naramon","t":"Naramon","s":[],"c":"name","p":"noun","r":"nah-rah-MOHN"}]`
+Output: [{"i":0,"w":"Aventura","t":"Adventure","s":["quest","journey"],"c":"foreign","p":"noun","r":"ah-ven-TOO-rah"},{"i":1,"w":"en","t":"in","s":[],"c":"foreign","p":"prep","r":"en"},{"i":2,"w":"Naramon","t":"Naramon","s":[],"c":"name","p":"noun","r":"nah-rah-MOHN"}]
+
+Fragment example:
+Input: {"words":[{"i":0,"w":"Sobre"},{"i":1,"w":"guardia"}],"from":"Spanish","to":"English","context":"Sobreguardia"}
+Output: [{"i":0,"w":"Sobre","t":"Overguard","s":["shield"],"c":"foreign","p":"noun","r":"soh-breh-GWAR-dee-ah","m":[0,1]},{"i":1,"w":"guardia","t":"guard","s":[],"c":"foreign","p":"noun","r":"GWAR-dee-ah"}]`
 
 // Part-of-speech color map
 export const POS_COLORS = {
@@ -36,6 +44,6 @@ export const POS_COLORS = {
 
 export const CATEGORY_COLORS = {
   name:   { bg: 'rgba(126,231,135,.12)', border: 'rgba(126,231,135,.25)', text: '#7ee787', label: 'Name' },
-  target: { bg: 'transparent', border: 'transparent', text: '#7ee787', label: null },
+  target: { bg: 'rgba(126,231,135,.06)', border: 'rgba(126,231,135,.1)', text: '#7ee787', label: null },
   number: { bg: 'transparent', border: 'transparent', text: '#7d8590', label: 'Number' },
 }

@@ -3,3 +3,5 @@ dist
 .env
 .env.local
 config.json
+logs/
+.claude/
