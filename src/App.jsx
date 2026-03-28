@@ -1872,6 +1872,9 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
       {/* Settings panel — independent of mode panel */}
       {showSettings && (
         <div style={{ ...S.keyBar, flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
+          <div style={{ fontSize: 11, color: '#7d8590' }}>
+            Settings for: <strong style={{ color: '#58a6ff' }}>{activeMode.type === 'language' ? '\u{1F310}' : '\u{1F4DA}'} {activeMode.name}</strong>
+          </div>
           {/* Anki — top-level collapsible */}
           <button
             onClick={() => setSettingsSection(settingsSection ? null : 'anki')}
