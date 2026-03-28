@@ -178,54 +178,66 @@ function apiPlugin() {
         }
       })
 
-      // Modes endpoint — per-mode files in modes/ directory
-      // GET /api/modes → list all modes: { modes: [...], activeModeId: N }
-      // GET /api/modes/1 → single mode
-      // POST /api/modes → save { modes: [...], activeModeId: N }
-      // POST /api/modes/1 → save single mode
+      // Modes endpoint — per-mode folders in modes/ directory
+      // Each mode: modes/<id>/config.json
+      // Meta: modes/_meta.json
+      // GET /api/modes → list all modes
+      // POST /api/modes → save all modes
       server.middlewares.use('/api/modes', (req, res) => {
         if (!fs.existsSync(MODES_DIR)) fs.mkdirSync(MODES_DIR, { recursive: true })
-        const idMatch = req.url.match(/^\/(\d+)/)
-        const modeId = idMatch ? idMatch[1] : null
+        const metaFile = path.join(MODES_DIR, '_meta.json')
+
+        const getModeDir = (id) => path.join(MODES_DIR, String(id))
+        const getModeFile = (id) => path.join(getModeDir(id), 'config.json')
 
         if (req.method === 'GET') {
           res.setHeader('Content-Type', 'application/json')
-          if (modeId) {
-            const file = path.join(MODES_DIR, `${modeId}.json`)
-            try {
-              res.end(fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : '{}')
-            } catch { res.end('{}') }
-          } else {
-            // List all modes
-            try {
-              const metaFile = path.join(MODES_DIR, '_meta.json')
-              const meta = fs.existsSync(metaFile) ? JSON.parse(fs.readFileSync(metaFile, 'utf-8')) : {}
-              const files = fs.readdirSync(MODES_DIR).filter((f) => f.match(/^\d+\.json$/))
-              const modes = files.map((f) => {
-                try { return JSON.parse(fs.readFileSync(path.join(MODES_DIR, f), 'utf-8')) } catch { return null }
-              }).filter(Boolean)
-              res.end(JSON.stringify({ modes, activeModeId: meta.activeModeId || (modes[0]?.id) || 1 }))
-            } catch { res.end('{"modes":[],"activeModeId":1}') }
-          }
+          try {
+            const meta = fs.existsSync(metaFile) ? JSON.parse(fs.readFileSync(metaFile, 'utf-8')) : {}
+            const dirs = fs.readdirSync(MODES_DIR).filter((d) => {
+              const full = path.join(MODES_DIR, d)
+              return fs.statSync(full).isDirectory() && fs.existsSync(path.join(full, 'config.json'))
+            })
+            // Also check for legacy flat files and migrate them
+            const legacyFiles = fs.readdirSync(MODES_DIR).filter((f) => f.match(/^\d+\.json$/))
+            for (const f of legacyFiles) {
+              const id = f.replace('.json', '')
+              const dir = getModeDir(id)
+              if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+              fs.renameSync(path.join(MODES_DIR, f), getModeFile(id))
+            }
+
+            const allDirs = fs.readdirSync(MODES_DIR).filter((d) => {
+              const full = path.join(MODES_DIR, d)
+              return fs.statSync(full).isDirectory() && fs.existsSync(path.join(full, 'config.json'))
+            })
+            const modes = allDirs.map((d) => {
+              try { return JSON.parse(fs.readFileSync(path.join(MODES_DIR, d, 'config.json'), 'utf-8')) } catch { return null }
+            }).filter(Boolean)
+            res.end(JSON.stringify({ modes, activeModeId: meta.activeModeId || (modes[0]?.id) || 1 }))
+          } catch { res.end('{"modes":[],"activeModeId":1}') }
         } else if (req.method === 'POST') {
           const handleBody = (bodyStr) => {
             try {
               const data = JSON.parse(bodyStr)
-              if (modeId) {
-                // Save single mode
-                fs.writeFileSync(path.join(MODES_DIR, `${modeId}.json`), JSON.stringify(data, null, 2), 'utf-8')
-              } else if (data.modes) {
-                // Save all modes + active ID
+              if (data.modes) {
+                // Save each mode to its own folder
+                const activeIds = new Set()
                 for (const mode of data.modes) {
-                  fs.writeFileSync(path.join(MODES_DIR, `${mode.id}.json`), JSON.stringify(mode, null, 2), 'utf-8')
+                  activeIds.add(String(mode.id))
+                  const dir = getModeDir(mode.id)
+                  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+                  fs.writeFileSync(getModeFile(mode.id), JSON.stringify(mode, null, 2), 'utf-8')
                 }
-                // Remove deleted modes
-                const activeIds = new Set(data.modes.map((m) => `${m.id}.json`))
-                fs.readdirSync(MODES_DIR).filter((f) => f.match(/^\d+\.json$/) && !activeIds.has(f)).forEach((f) => {
-                  fs.unlinkSync(path.join(MODES_DIR, f))
+                // Remove deleted mode folders
+                fs.readdirSync(MODES_DIR).forEach((d) => {
+                  const full = path.join(MODES_DIR, d)
+                  if (fs.statSync(full).isDirectory() && !activeIds.has(d)) {
+                    fs.rmSync(full, { recursive: true, force: true })
+                  }
                 })
-                // Save meta (activeModeId)
-                fs.writeFileSync(path.join(MODES_DIR, '_meta.json'), JSON.stringify({ activeModeId: data.activeModeId }), 'utf-8')
+                // Save meta
+                fs.writeFileSync(metaFile, JSON.stringify({ activeModeId: data.activeModeId }), 'utf-8')
               }
               res.setHeader('Content-Type', 'application/json')
               res.end('{"ok":true}')
@@ -241,13 +253,6 @@ function apiPlugin() {
             req.on('data', (chunk) => { body += chunk })
             req.on('end', () => handleBody(body))
           }
-        } else if (req.method === 'DELETE' && modeId) {
-          try {
-            const file = path.join(MODES_DIR, `${modeId}.json`)
-            if (fs.existsSync(file)) fs.unlinkSync(file)
-            res.setHeader('Content-Type', 'application/json')
-            res.end('{"ok":true}')
-          } catch { res.statusCode = 500; res.end('{"error":"delete failed"}') }
         } else {
           res.statusCode = 405
           res.end('')

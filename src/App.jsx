@@ -1891,7 +1891,10 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                 style={{ ...S.keyInput, width: 150, fontSize: 11, padding: '2px 6px', display: 'inline' }}
               />
             ) : (
-              <strong onClick={() => setEditingModeName(activeModeId)} style={{ color: '#58a6ff', cursor: 'pointer' }} title="Click to rename">
+              <strong onClick={() => setEditingModeName(activeModeId)} style={{
+                color: '#58a6ff', cursor: 'pointer', padding: '3px 8px', borderRadius: 4,
+                border: '1px solid rgba(88,166,255,.3)', background: 'rgba(88,166,255,.08)',
+              }} title="Click to rename">
                 {activeMode.type === 'language' ? '\u{1F310}' : '\u{1F4DA}'} {activeMode.name}
               </strong>
             )}
