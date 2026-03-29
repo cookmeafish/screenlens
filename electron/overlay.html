@@ -9,22 +9,27 @@
       background: transparent;
       font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
     }
-    #overlay-root { position: relative; width: 100%; height: 100%; }
+    body.active { background: #000; }
+    #overlay-root {
+      position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+      z-index: 2;
+    }
     #screenshot-bg {
       position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-      object-fit: cover; z-index: -1; display: none;
+      object-fit: fill; z-index: 1; display: none;
     }
 
     .word-box {
       position: absolute;
-      background: rgba(88,166,255,0.2);
-      border: 2px solid rgba(88,166,255,0.7);
-      border-radius: 3px;
+      background: rgba(255,255,0,0.15);
+      border: 2px solid rgba(255,255,0,0.8);
+      border-radius: 2px;
       cursor: pointer;
-      transition: background 0.15s, border-color 0.15s;
+      transition: background 0.1s;
+      z-index: 3;
     }
     .word-box:hover {
-      background: rgba(88,166,255,0.4);
+      background: rgba(255,255,0,0.35);
       border-color: #7ee787;
     }
     .word-label {

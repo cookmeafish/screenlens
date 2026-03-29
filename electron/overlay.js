@@ -154,6 +154,7 @@ function clearOverlay() {
   root.innerHTML = ''
   screenshotBg.style.display = 'none'
   screenshotBg.src = ''
+  document.body.classList.remove('active')
   if (currentTooltip) { currentTooltip.remove(); currentTooltip = null }
   hideStatus()
 }
@@ -208,6 +209,11 @@ function renderWords(words) {
   })
 
   console.log('[Overlay] Rendered', rendered, 'word boxes. Skipped:', JSON.stringify(skipped))
+  console.log('[Overlay] DOM children in root:', root.children.length)
+  if (rendered > 0) {
+    const first = root.children[0]
+    console.log('[Overlay] First box style:', first.style.cssText)
+  }
   showStatus(`${rendered} words. Hover to see translations. ESC to close.`)
 
   if (rendered === 0 && words.length > 0) {
@@ -258,6 +264,7 @@ async function processScreenshot(dataUrl) {
   clearOverlay()
 
   // Show frozen screenshot as backdrop immediately
+  document.body.classList.add('active')
   screenshotBg.src = dataUrl
   screenshotBg.style.display = 'block'
   showStatus('Processing screenshot...', true)
