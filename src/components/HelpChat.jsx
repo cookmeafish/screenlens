@@ -205,8 +205,8 @@ export default function HelpChat({ apiKey }) {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') sendMessage() }}
-                placeholder={apiKey ? 'Ask a question...' : 'Set API key first'}
-                disabled={!apiKey || loading}
+                placeholder={apiKey ? (loading ? 'Thinking...' : 'Ask a question...') : 'Set API key first'}
+                disabled={!apiKey}
                 style={{
                   flex: 1, padding: '6px 10px', background: '#0e1117', color: '#e6edf3',
                   border: '1px solid #2a3040', borderRadius: 6, fontSize: 11,
