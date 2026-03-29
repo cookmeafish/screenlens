@@ -1,28 +1,95 @@
-// ScreenLens Overlay — transparent screen translation overlay
+// ScreenLens Overlay — canvas-based rendering (no CSS stacking issues)
 const VITE_URL = 'http://localhost:3000'
-const root = document.getElementById('overlay-root')
-let currentTooltip = null
+const canvas = document.getElementById('c')
+const ctx = canvas.getContext('2d')
+
+let words = [] // rendered words with screen coords
+let tooltip = null
 let statusEl = null
-let imgWidth = 0
-let imgHeight = 0
+let screenshotImg = null
 
-console.log('[Overlay] Script loaded. Screen:', window.innerWidth, 'x', window.innerHeight)
+console.log('[Overlay] Loaded. window:', window.innerWidth, 'x', window.innerHeight)
 
-// ─── Status Bar ─────────────────────────────────────────────────────────
-function showStatus(msg, loading) {
+// ─── Status ─────────────────────────────────────────────────────────────
+function status(msg, loading) {
   if (statusEl) statusEl.remove()
   statusEl = document.createElement('div')
   statusEl.className = 'status-bar'
-  statusEl.innerHTML = loading ? '<span class="loading-dot"></span>' + msg : msg
+  statusEl.innerHTML = (loading ? '<span class="dot"></span>' : '') + msg
   document.body.appendChild(statusEl)
 }
-function hideStatus() { if (statusEl) { statusEl.remove(); statusEl = null } }
 
-// ─── Helpers ────────────────────────────────────────────────────────────
-function getImageSize(dataUrl) {
+// ─── Canvas resize ──────────────────────────────────────────────────────
+function resizeCanvas() {
+  canvas.width = window.innerWidth
+  canvas.height = window.innerHeight
+  if (screenshotImg) draw()
+}
+window.addEventListener('resize', resizeCanvas)
+resizeCanvas()
+
+// ─── Draw everything on canvas ──────────────────────────────────────────
+function draw() {
+  const W = canvas.width, H = canvas.height
+  ctx.clearRect(0, 0, W, H)
+
+  // Draw screenshot
+  if (screenshotImg) {
+    ctx.drawImage(screenshotImg, 0, 0, W, H)
+  }
+
+  // Draw word boxes
+  words.forEach(w => {
+    // Yellow highlight box
+    ctx.strokeStyle = 'rgba(255, 255, 0, 0.9)'
+    ctx.lineWidth = 2
+    ctx.strokeRect(w.sx, w.sy, w.sw, w.sh)
+
+    // Semi-transparent fill
+    ctx.fillStyle = 'rgba(255, 255, 0, 0.12)'
+    ctx.fillRect(w.sx, w.sy, w.sw, w.sh)
+  })
+
+  console.log('[Overlay] Drew', words.length, 'boxes on canvas', W, 'x', H)
+}
+
+// ─── Mouse interaction ──────────────────────────────────────────────────
+canvas.addEventListener('mousemove', (e) => {
+  const mx = e.clientX, my = e.clientY
+  const hit = words.find(w => mx >= w.sx && mx <= w.sx + w.sw && my >= w.sy && my <= w.sy + w.sh)
+  if (hit) {
+    showTooltip(hit, mx, my)
+    canvas.style.cursor = 'pointer'
+  } else {
+    hideTooltip()
+    canvas.style.cursor = 'default'
+  }
+})
+
+function showTooltip(w, mx, my) {
+  hideTooltip()
+  const t = document.createElement('div')
+  t.className = 'tooltip'
+  t.innerHTML = '<div class="tw">' + w.text + '</div>'
+    + (w.translation ? '<div class="tt">&rarr; ' + w.translation + '</div>' : '')
+    + (w.pronunciation ? '<div class="tp">/' + w.pronunciation + '/</div>' : '')
+    + (w.synonyms && w.synonyms.length ? '<div class="ts">Syn: ' + w.synonyms.join(', ') + '</div>' : '')
+  t.style.left = Math.min(mx + 10, window.innerWidth - 360) + 'px'
+  t.style.top = (my > 100 ? my - 10 + 'px' : my + 20 + 'px')
+  if (my > 100) t.style.transform = 'translateY(-100%)'
+  document.body.appendChild(t)
+  tooltip = t
+}
+
+function hideTooltip() {
+  if (tooltip) { tooltip.remove(); tooltip = null }
+}
+
+// ─── Load image ─────────────────────────────────────────────────────────
+function loadImage(dataUrl) {
   return new Promise(resolve => {
     const img = new Image()
-    img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight })
+    img.onload = () => resolve(img)
     img.src = dataUrl
   })
 }
@@ -31,11 +98,11 @@ function getImageSize(dataUrl) {
 let Tesseract = null
 async function loadTesseract() {
   if (Tesseract) return
-  showStatus('Loading OCR engine...', true)
+  status('Loading OCR engine...', true)
   await new Promise((res, rej) => {
     const s = document.createElement('script')
     s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'
-    s.onload = () => { Tesseract = window.Tesseract; console.log('[Overlay] Tesseract ready'); res() }
+    s.onload = () => { Tesseract = window.Tesseract; res() }
     s.onerror = rej
     document.head.appendChild(s)
   })
@@ -43,13 +110,14 @@ async function loadTesseract() {
 
 async function runOCR(dataUrl) {
   await loadTesseract()
-  showStatus('Running OCR...', true)
-  const result = await Tesseract.recognize(dataUrl, 'spa+eng', {
-    logger: m => { if (m.status === 'recognizing text') showStatus('OCR ' + Math.round(m.progress * 100) + '%', true) }
+  status('Running OCR...', true)
+  const r = await Tesseract.recognize(dataUrl, 'spa+eng', {
+    logger: m => { if (m.status === 'recognizing text') status('OCR ' + Math.round(m.progress * 100) + '%', true) }
   })
-  return result.data.words
-    .filter(w => w.confidence > 40 && w.text.trim().length > 1)
+  const w = r.data.words.filter(w => w.confidence > 40 && w.text.trim().length > 1)
     .map((w, i) => ({ i, text: w.text.trim(), bbox: w.bbox, confidence: w.confidence }))
+  console.log('[Overlay] OCR:', w.length, 'words')
+  return w
 }
 
 // ─── Translation ────────────────────────────────────────────────────────
@@ -60,17 +128,17 @@ async function getConfig() {
       fetch(VITE_URL + '/api/config').then(r => r.json()),
     ])
     return { keys, config }
-  } catch (e) { console.error('[Overlay] Config fetch failed:', e); return null }
+  } catch (e) { return null }
 }
 
-async function translate(words, apiKey, from, to) {
-  showStatus('Translating ' + words.length + ' words...', true)
+async function translate(ocrWords, apiKey, from, to) {
+  status('Translating ' + ocrWords.length + ' words...', true)
   const body = JSON.stringify({
-    words: words.slice(0, 80).map(w => ({ i: w.i, w: w.text })),
+    words: ocrWords.slice(0, 80).map(w => ({ i: w.i, w: w.text })),
     from: from || 'Spanish', to: to || 'English',
-    context: words.map(w => w.text).join(' ').substring(0, 500),
+    context: ocrWords.map(w => w.text).join(' ').substring(0, 500),
   })
-  const prompt = 'Translate words. Return JSON array: [{"i":0,"w":"word","t":"translation","s":[],"c":"foreign","p":"noun","r":"pronunciation"}]. Output ONLY raw JSON.'
+  const prompt = 'Translate words. Return JSON array: [{"i":0,"w":"word","t":"translation","s":[],"c":"foreign","p":"noun","r":"pron"}]. Output ONLY raw JSON.'
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
@@ -78,95 +146,75 @@ async function translate(words, apiKey, from, to) {
   })
   if (!resp.ok) throw new Error('API ' + resp.status)
   const data = await resp.json()
-  const text = data.content[0].text
-  try { return JSON.parse(text.replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()) }
-  catch { console.error('[Overlay] Parse failed:', text.substring(0, 100)); return [] }
+  try { return JSON.parse(data.content[0].text.replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()) }
+  catch { return [] }
 }
 
-// ─── Render ─────────────────────────────────────────────────────────────
-function clearAll() {
-  root.innerHTML = ''
-  root.style.backgroundImage = ''
-  if (currentTooltip) { currentTooltip.remove(); currentTooltip = null }
-  hideStatus()
-}
-
-function renderBoxes(words) {
-  const sw = window.innerWidth, sh = window.innerHeight
-  const sx = imgWidth > 0 ? sw / imgWidth : 1
-  const sy = imgHeight > 0 ? sh / imgHeight : 1
-  console.log('[Overlay] Render: img=' + imgWidth + 'x' + imgHeight + ' screen=' + sw + 'x' + sh + ' scale=' + sx.toFixed(3) + 'x' + sy.toFixed(3))
-
-  let count = 0
-  words.forEach(w => {
-    if (w.category === 'number') return
-    const x = Math.round(w.bbox.x0 * sx), y = Math.round(w.bbox.y0 * sy)
-    const bw = Math.round((w.bbox.x1 - w.bbox.x0) * sx), bh = Math.round((w.bbox.y1 - w.bbox.y0) * sy)
-    if (bw < 5 || bh < 5) return
-
-    const el = document.createElement('div')
-    el.className = 'word-box'
-    el.style.left = x + 'px'
-    el.style.top = y + 'px'
-    el.style.width = bw + 'px'
-    el.style.height = bh + 'px'
-    el.onmouseenter = () => showTip(w, el)
-    el.onmouseleave = () => hideTip()
-    root.appendChild(el)
-    count++
-  })
-  console.log('[Overlay] Rendered ' + count + ' boxes, root.children=' + root.children.length)
-  showStatus(count + ' words. Hover for translations. ESC to close.')
-}
-
-function showTip(w, el) {
-  hideTip()
-  const t = document.createElement('div')
-  t.className = 'tooltip'
-  t.innerHTML = '<div class="word">' + w.text + '</div>'
-    + (w.translation ? '<div class="translation">&rarr; ' + w.translation + '</div>' : '')
-    + (w.pronunciation ? '<div class="pronunciation">/' + w.pronunciation + '/</div>' : '')
-    + (w.synonyms && w.synonyms.length ? '<div class="synonyms">Syn: ' + w.synonyms.join(', ') + '</div>' : '')
-  const r = el.getBoundingClientRect()
-  t.style.left = Math.max(10, r.left) + 'px'
-  t.style.top = (r.top > 80 ? r.top - 10 : r.bottom + 10) + 'px'
-  if (r.top > 80) t.style.transform = 'translateY(-100%)'
-  document.body.appendChild(t)
-  currentTooltip = t
-}
-function hideTip() { if (currentTooltip) { currentTooltip.remove(); currentTooltip = null } }
-
-// ─── Main ───────────────────────────────────────────────────────────────
+// ─── Main process ───────────────────────────────────────────────────────
 async function process(dataUrl) {
-  clearAll()
+  words = []
+  hideTooltip()
+  if (statusEl) statusEl.remove()
 
-  // Set screenshot as background of root div
-  root.style.backgroundImage = 'url(' + dataUrl + ')'
-  showStatus('Processing...', true)
+  // Load and draw screenshot immediately
+  status('Loading screenshot...', true)
+  screenshotImg = await loadImage(dataUrl)
+  console.log('[Overlay] Image:', screenshotImg.naturalWidth, 'x', screenshotImg.naturalHeight)
+  resizeCanvas()
+  draw() // draw screenshot immediately
 
-  const size = await getImageSize(dataUrl)
-  imgWidth = size.w; imgHeight = size.h
-  console.log('[Overlay] Screenshot: ' + imgWidth + 'x' + imgHeight)
-
+  // Get config
   const cfg = await getConfig()
-  if (!cfg) { showStatus('Cannot connect to ScreenLens. Is npm run dev running?'); return }
+  if (!cfg) { status('Cannot connect to ScreenLens. Run npm run dev first.'); return }
   const apiKey = cfg.keys && cfg.keys.anthropic
-  if (!apiKey) { showStatus('No API key. Set one in the web app.'); return }
+  if (!apiKey) { status('No API key set. Configure in web app first.'); return }
 
+  // OCR
   const ocrWords = await runOCR(dataUrl)
-  console.log('[Overlay] OCR: ' + ocrWords.length + ' words')
-  if (!ocrWords.length) { showStatus('No text found.'); return }
+  if (!ocrWords.length) { status('No text found.'); return }
 
+  // Translate
   const from = cfg.config && cfg.config.language !== 'auto' ? cfg.config.language : 'Spanish'
-  const to = cfg.config && cfg.config.targetLang || 'English'
+  const to = (cfg.config && cfg.config.targetLang) || 'English'
   const trans = await translate(ocrWords, apiKey, from, to)
 
-  const merged = ocrWords.map(w => {
+  // Merge and calculate screen coordinates
+  const imgW = screenshotImg.naturalWidth, imgH = screenshotImg.naturalHeight
+  const scrW = canvas.width, scrH = canvas.height
+  const sx = scrW / imgW, sy = scrH / imgH
+  console.log('[Overlay] Scale:', sx.toFixed(3), 'x', sy.toFixed(3), 'img:', imgW, 'x', imgH, 'canvas:', scrW, 'x', scrH)
+
+  words = ocrWords.map(w => {
     const t = trans.find(tr => tr.i === w.i)
-    return { ...w, translation: t && t.t || '', synonyms: t && t.s || [], category: t && t.c || 'foreign', partOfSpeech: t && t.p || 'other', pronunciation: t && t.r || '' }
-  })
-  console.log('[Overlay] Merged: ' + merged.length + ' words')
-  renderBoxes(merged)
+    return {
+      text: w.text,
+      translation: t && t.t || '',
+      synonyms: t && t.s || [],
+      category: t && t.c || 'foreign',
+      pronunciation: t && t.r || '',
+      // Screen coordinates
+      sx: Math.round(w.bbox.x0 * sx),
+      sy: Math.round(w.bbox.y0 * sy),
+      sw: Math.round((w.bbox.x1 - w.bbox.x0) * sx),
+      sh: Math.round((w.bbox.y1 - w.bbox.y0) * sy),
+    }
+  }).filter(w => w.category !== 'number' && w.sw > 3 && w.sh > 3)
+
+  console.log('[Overlay] Final:', words.length, 'words with coords')
+  if (words.length > 0) {
+    console.log('[Overlay] First box:', words[0].text, 'at', words[0].sx, words[0].sy, words[0].sw, 'x', words[0].sh)
+  }
+
+  draw() // redraw with boxes
+  status(words.length + ' words. Hover for translations. ESC to close.')
+}
+
+function clearAll() {
+  words = []
+  screenshotImg = null
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+  hideTooltip()
+  if (statusEl) { statusEl.remove(); statusEl = null }
 }
 
 // ─── IPC ────────────────────────────────────────────────────────────────
@@ -175,8 +223,10 @@ if (window.overlayAPI) {
     console.log('[Overlay] Capture received, len=' + dataUrl.length)
     process(dataUrl)
   })
-  window.overlayAPI.onDismiss(() => { console.log('[Overlay] Dismiss'); clearAll() })
+  window.overlayAPI.onDismiss(() => { clearAll() })
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') { clearAll(); window.overlayAPI.dismiss() }
   })
+} else {
+  console.error('[Overlay] overlayAPI not available!')
 }

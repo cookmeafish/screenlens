@@ -3,6 +3,10 @@ const path = require('path')
 
 let overlayWindow = null
 
+// Disable GPU acceleration to avoid compositing issues
+app.commandLine.appendSwitch('disable-gpu')
+app.commandLine.appendSwitch('disable-software-rasterizer')
+
 app.whenReady().then(() => {
   createOverlay()
   registerShortcuts()
@@ -10,8 +14,9 @@ app.whenReady().then(() => {
 })
 
 function createOverlay() {
-  const { width, height } = screen.getPrimaryDisplay().bounds
-  console.log('[Overlay] Creating window:', width, 'x', height)
+  const display = screen.getPrimaryDisplay()
+  const { width, height } = display.bounds
+  console.log('[Overlay] Display:', width, 'x', height, 'scale:', display.scaleFactor)
 
   overlayWindow = new BrowserWindow({
     width, height, x: 0, y: 0,
@@ -19,27 +24,23 @@ function createOverlay() {
     alwaysOnTop: true,
     skipTaskbar: true,
     resizable: false,
-    fullscreen: true,
     backgroundColor: '#000000',
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
+      offscreen: false,
     },
   })
 
   overlayWindow.loadFile(path.join(__dirname, 'overlay.html'))
-  overlayWindow.setIgnoreMouseEvents(true, { forward: true })
-  overlayWindow.hide()
 
-  // Pipe renderer console to terminal
   overlayWindow.webContents.on('console-message', (_, level, message) => {
     console.log('[Renderer]', message)
   })
-
   overlayWindow.webContents.on('did-finish-load', () => {
     console.log('[Overlay] Page loaded')
   })
-
   if (process.argv.includes('--dev')) {
     overlayWindow.webContents.openDevTools({ mode: 'detach' })
   }
@@ -49,54 +50,38 @@ function registerShortcuts() {
   globalShortcut.register('CommandOrControl+Shift+S', async () => {
     console.log('[Overlay] Ctrl+Shift+S pressed')
 
-    // Hide overlay first so we don't screenshot it
+    // Hide overlay first
     overlayWindow.hide()
-    console.log('[Overlay] Window hidden for capture')
-
-    // Small delay to let the window fully hide
-    await new Promise(r => setTimeout(r, 200))
+    await new Promise(r => setTimeout(r, 300))
 
     try {
       const display = screen.getPrimaryDisplay()
-      console.log('[Overlay] Display size:', display.size.width, 'x', display.size.height, 'scaleFactor:', display.scaleFactor)
-
       const sources = await desktopCapturer.getSources({
         types: ['screen'],
         thumbnailSize: { width: display.size.width, height: display.size.height },
       })
-
-      if (!sources.length) {
-        console.error('[Overlay] No screen sources found')
-        return
-      }
+      if (!sources.length) { console.error('[Overlay] No sources'); return }
 
       const screenshot = sources[0].thumbnail.toDataURL()
-      console.log('[Overlay] Screenshot captured, size:', screenshot.length, 'chars')
+      console.log('[Overlay] Screenshot captured:', screenshot.length, 'chars')
 
-      // Show overlay and bring to front
+      // Show and maximize
       overlayWindow.show()
+      overlayWindow.maximize()
       overlayWindow.setAlwaysOnTop(true, 'screen-saver')
-      overlayWindow.setIgnoreMouseEvents(false)
       overlayWindow.focus()
 
-      // Send screenshot to renderer
       overlayWindow.webContents.send('overlay-capture', screenshot)
-      console.log('[Overlay] Screenshot sent to renderer')
+      console.log('[Overlay] Sent to renderer')
     } catch (err) {
-      console.error('[Overlay] Capture failed:', err.message)
+      console.error('[Overlay] Capture failed:', err)
     }
   })
 }
 
-// Dismiss overlay
 ipcMain.on('overlay-dismiss', () => {
-  console.log('[Overlay] Dismiss requested')
-  if (overlayWindow) {
-    overlayWindow.webContents.send('overlay-dismiss')
-    overlayWindow.setIgnoreMouseEvents(true, { forward: true })
-    overlayWindow.hide()
-    console.log('[Overlay] Hidden')
-  }
+  console.log('[Overlay] Dismissed')
+  if (overlayWindow) overlayWindow.hide()
 })
 
 ipcMain.on('set-ignore-mouse', (_, ignore) => {
