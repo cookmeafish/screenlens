@@ -92,6 +92,7 @@ async function preprocessForOCR(dataUrl) {
 
 export default function App() {
   // ─── State ───────────────────────────────────────────────────────────────────
+  const isOverlay = new URLSearchParams(window.location.search).has('overlay')
   const [provider, setProvider] = useState('anthropic')
   const [configLoaded, setConfigLoaded] = useState(false)
   const [apiKeys, setApiKeys] = useState({})
@@ -275,12 +276,19 @@ export default function App() {
         const blob = await resp.blob()
         const reader = new FileReader()
         reader.onload = (e) => {
-          loadImageFromDataUrl(e.target.result)
-          // Auto-start analysis after a short delay
-          setTimeout(() => {
-            const analyzeBtn = document.querySelector('[data-analyze]')
-            if (analyzeBtn) analyzeBtn.click()
-          }, 500)
+          const dataUrl = e.target.result
+          // Load image and auto-start analysis
+          const img = new Image()
+          img.onload = () => {
+            setImgDims({ w: img.naturalWidth, h: img.naturalHeight })
+            setScreenshot(dataUrl)
+            setStage('captured')
+            setOcrWords([])
+            setError(null)
+            // Auto-analyze after state update
+            setTimeout(() => window.__autoAnalyze = dataUrl, 100)
+          }
+          img.src = dataUrl
         }
         reader.readAsDataURL(blob)
       } catch (err) {
@@ -805,6 +813,19 @@ export default function App() {
     window.addEventListener('paste', handler)
     return () => window.removeEventListener('paste', handler)
   }, [loadImageFromFile])
+
+  // ─── Overlay auto-analyze ────────────────────────────────────────────────
+  useEffect(() => {
+    if (!isOverlay) return
+    const interval = setInterval(() => {
+      if (window.__autoAnalyze && stage === 'captured') {
+        const dataUrl = window.__autoAnalyze
+        window.__autoAnalyze = null
+        analyzeImage(dataUrl)
+      }
+    }, 200)
+    return () => clearInterval(interval)
+  })
 
   // ─── Drag & Drop ───────────────────────────────────────────────────────────
   const handleDragOver = (e) => {
@@ -1829,7 +1850,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
       )}
 
       {/* ── Header ───────────────────────────────────────────────────────────── */}
-      <header style={S.header}>
+      {!isOverlay && <header style={S.header}>
         <div style={S.headerLeft}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
             <rect x="2" y="3" width="20" height="18" rx="2" stroke="#58a6ff" strokeWidth="2"/>
@@ -1968,7 +1989,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
 
           <kbd style={S.kbd}>Ctrl+Shift+S</kbd>
         </div>
-      </header>
+      </header>}
 
       {/* ── API Key Input ────────────────────────────────────────────────────── */}
       {showKeyInput && (

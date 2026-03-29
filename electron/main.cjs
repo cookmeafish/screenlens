@@ -1,6 +1,9 @@
 const { app, BrowserWindow, globalShortcut, screen, desktopCapturer, ipcMain } = require('electron')
 const path = require('path')
+const fs = require('fs')
 
+const VITE_URL = 'http://localhost:3000'
+const SCREENSHOT_FILE = path.resolve('electron/last-capture.png')
 let overlayWindow = null
 
 app.whenReady().then(() => {
@@ -11,75 +14,54 @@ app.whenReady().then(() => {
 
 function createOverlay() {
   const { width, height } = screen.getPrimaryDisplay().bounds
-  console.log('[Overlay] Display:', width, 'x', height)
-
   overlayWindow = new BrowserWindow({
     width, height, x: 0, y: 0,
-    transparent: true,
     frame: false,
     alwaysOnTop: true,
     skipTaskbar: true,
-    hasShadow: false,
     show: false,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
-      contextIsolation: true,
-    },
+    backgroundColor: '#0e1117',
   })
 
-  overlayWindow.loadFile(path.join(__dirname, 'overlay.html'))
-  overlayWindow.setIgnoreMouseEvents(true, { forward: true })
-
+  overlayWindow.loadURL(VITE_URL + '?overlay=true')
   overlayWindow.webContents.on('console-message', (_, l, m) => console.log('[Renderer]', m))
-  overlayWindow.webContents.on('did-finish-load', () => console.log('[Overlay] Loaded'))
-
-  if (process.argv.includes('--dev')) {
-    overlayWindow.webContents.openDevTools({ mode: 'detach' })
-  }
+  overlayWindow.webContents.on('did-finish-load', () => console.log('[Overlay] Web app loaded'))
 }
 
 function registerShortcuts() {
   globalShortcut.register('CommandOrControl+Shift+S', async () => {
     console.log('[Overlay] Capture triggered')
-
-    // If visible, dismiss first
     if (overlayWindow.isVisible()) {
       overlayWindow.hide()
-      overlayWindow.setIgnoreMouseEvents(true, { forward: true })
-      overlayWindow.webContents.send('overlay-dismiss')
       await new Promise(r => setTimeout(r, 200))
     }
-
-    // Hide to avoid capturing ourselves
     overlayWindow.hide()
     await new Promise(r => setTimeout(r, 300))
 
     try {
-      const display = screen.getPrimaryDisplay()
       const sources = await desktopCapturer.getSources({
-        types: ['screen'], thumbnailSize: display.size,
+        types: ['screen'], thumbnailSize: screen.getPrimaryDisplay().size,
       })
       if (!sources.length) return
 
-      const dataUrl = sources[0].thumbnail.toDataURL()
-      console.log('[Overlay] Screenshot:', dataUrl.length, 'chars')
+      fs.writeFileSync(SCREENSHOT_FILE, sources[0].thumbnail.toPNG())
+      console.log('[Overlay] Screenshot saved')
 
-      // Show overlay, allow mouse interaction on drawn areas
-      overlayWindow.showInactive()
+      overlayWindow.show()
+      overlayWindow.maximize()
       overlayWindow.setAlwaysOnTop(true, 'screen-saver')
-      overlayWindow.setIgnoreMouseEvents(false)
+      overlayWindow.focus()
 
-      overlayWindow.webContents.send('overlay-capture', dataUrl)
+      overlayWindow.webContents.executeJavaScript(`
+        window.__overlayScreenshot = '/api/overlay-screenshot?' + Date.now();
+        window.dispatchEvent(new CustomEvent('overlay-capture'));
+      `)
     } catch (e) { console.error('[Overlay] Error:', e) }
   })
 }
 
 ipcMain.on('overlay-dismiss', () => {
-  console.log('[Overlay] Dismiss')
-  if (overlayWindow) {
-    overlayWindow.setIgnoreMouseEvents(true, { forward: true })
-    overlayWindow.hide()
-  }
+  if (overlayWindow) overlayWindow.hide()
 })
 
 app.on('will-quit', () => globalShortcut.unregisterAll())
