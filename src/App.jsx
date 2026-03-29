@@ -10,6 +10,7 @@ import { ankiPing, ankiGetDecks, ankiCreateDeck, ankiAddNote, ankiFindCards, ank
 
 
 // ─── Image Preprocessing for OCR ────────────────────────────────────────────
+// Creates a high-contrast grayscale version optimized for Tesseract
 async function preprocessForOCR(dataUrl) {
   return new Promise((resolve) => {
     const img = new Image()
@@ -22,6 +23,7 @@ async function preprocessForOCR(dataUrl) {
 
       const imageData = ctx.getImageData(0, 0, c.width, c.height)
       const d = imageData.data
+      const pixelCount = d.length / 4
 
       // Step 1: Convert to grayscale
       for (let i = 0; i < d.length; i += 4) {
@@ -29,58 +31,24 @@ async function preprocessForOCR(dataUrl) {
         d[i] = d[i + 1] = d[i + 2] = gray
       }
 
-      // Step 2: Detect if background is dark
+      // Step 2: Detect brightness
       let totalBrightness = 0
-      const pixelCount = d.length / 4
       for (let i = 0; i < d.length; i += 4) totalBrightness += d[i]
       const avgBrightness = totalBrightness / pixelCount
       const isDark = avgBrightness < 128
 
-      // Step 3: Contrast enhancement
-      const factor = isDark ? 1.8 : 1.4
+      // Step 3: Strong contrast enhancement (2.5x for better text extraction)
+      const factor = 2.5
       for (let i = 0; i < d.length; i += 4) {
         const val = (d[i] - 128) * factor + 128
         d[i] = d[i + 1] = d[i + 2] = Math.max(0, Math.min(255, val))
       }
 
-      // Step 4: Adaptive thresholding
-      const w = c.width, h = c.height
-      const gray = new Uint8Array(pixelCount)
-      for (let i = 0; i < pixelCount; i++) gray[i] = d[i * 4]
-
-      const blockSize = Math.max(15, Math.round(Math.min(w, h) / 50) | 1)
-      const half = blockSize >> 1
-      const threshold = new Uint8Array(pixelCount)
-
-      // Build integral image for fast local averages
-      const integral = new Float64Array((w + 1) * (h + 1))
-      for (let y = 0; y < h; y++) {
-        let rowSum = 0
-        for (let x = 0; x < w; x++) {
-          rowSum += gray[y * w + x]
-          integral[(y + 1) * (w + 1) + (x + 1)] = rowSum + integral[y * (w + 1) + (x + 1)]
+      // Step 4: If dark background, invert (Tesseract prefers dark text on white)
+      if (isDark) {
+        for (let i = 0; i < d.length; i += 4) {
+          d[i] = d[i + 1] = d[i + 2] = 255 - d[i]
         }
-      }
-
-      for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-          const x0 = Math.max(0, x - half), y0 = Math.max(0, y - half)
-          const x1 = Math.min(w - 1, x + half), y1 = Math.min(h - 1, y + half)
-          const count = (x1 - x0 + 1) * (y1 - y0 + 1)
-          const sum = integral[(y1 + 1) * (w + 1) + (x1 + 1)]
-            - integral[y0 * (w + 1) + (x1 + 1)]
-            - integral[(y1 + 1) * (w + 1) + x0]
-            + integral[y0 * (w + 1) + x0]
-          const localMean = sum / count
-          const offset = isDark ? -15 : 15
-          threshold[y * w + x] = gray[y * w + x] > localMean - offset ? 255 : 0
-        }
-      }
-
-      // If dark background, invert so text is dark on white (Tesseract prefers this)
-      for (let i = 0; i < pixelCount; i++) {
-        const val = isDark ? (255 - threshold[i]) : threshold[i]
-        d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = val
       }
 
       ctx.putImageData(imageData, 0, 0)
@@ -93,6 +61,18 @@ async function preprocessForOCR(dataUrl) {
 export default function App() {
   // ─── State ───────────────────────────────────────────────────────────────────
   const isOverlay = new URLSearchParams(window.location.search).has('overlay')
+
+  // ESC closes overlay window
+  useEffect(() => {
+    if (!isOverlay) return
+    const handleEsc = (e) => {
+      if (e.key === 'Escape') {
+        window.close() // Electron will handle this
+      }
+    }
+    window.addEventListener('keydown', handleEsc)
+    return () => window.removeEventListener('keydown', handleEsc)
+  }, [isOverlay])
   const [provider, setProvider] = useState('anthropic')
   const [configLoaded, setConfigLoaded] = useState(false)
   const [apiKeys, setApiKeys] = useState({})
@@ -440,26 +420,52 @@ export default function App() {
         ocrInput = c.toDataURL('image/png')
       }
 
-      // Preprocess image for better OCR accuracy (grayscale, contrast, threshold)
+      // Run OCR on both original and preprocessed for better coverage
       setProgress('Preprocessing image…')
-      ocrInput = await preprocessForOCR(ocrInput)
+      const preprocessed = await preprocessForOCR(ocrInput)
 
       const ocrLang = language === 'auto' ? 'eng+spa+fra+deu+por+ita' : language
-      const result = await Tesseract.recognize(ocrInput, ocrLang, {
+
+      // Pass 1: Preprocessed image (good for clean text)
+      setProgress('OCR pass 1 (preprocessed)…')
+      const result1 = await Tesseract.recognize(preprocessed, ocrLang, {
         logger: (m) => {
-          if (m.status === 'recognizing text') {
-            setProgress(`OCR: ${Math.round((m.progress || 0) * 100)}%`)
-          } else if (m.status) {
-            setProgress(m.status)
-          }
+          if (m.status === 'recognizing text') setProgress(`OCR pass 1: ${Math.round((m.progress || 0) * 100)}%`)
         },
       })
+
+      // Pass 2: Original image (catches text on complex backgrounds)
+      setProgress('OCR pass 2 (original)…')
+      const result2 = await Tesseract.recognize(ocrInput, ocrLang, {
+        logger: (m) => {
+          if (m.status === 'recognizing text') setProgress(`OCR pass 2: ${Math.round((m.progress || 0) * 100)}%`)
+        },
+      })
+
+      // Merge results — take all words from pass 1, add unique words from pass 2
+      const words1 = result1.data.words || []
+      const words2 = result2.data.words || []
+      const merged = [...words1]
+
+      // Add words from pass 2 that don't overlap with pass 1
+      for (const w2 of words2) {
+        const overlaps = words1.some((w1) => {
+          const overlapX = Math.max(0, Math.min(w1.bbox.x1, w2.bbox.x1) - Math.max(w1.bbox.x0, w2.bbox.x0))
+          const overlapY = Math.max(0, Math.min(w1.bbox.y1, w2.bbox.y1) - Math.max(w1.bbox.y0, w2.bbox.y0))
+          const overlapArea = overlapX * overlapY
+          const w2Area = (w2.bbox.x1 - w2.bbox.x0) * (w2.bbox.y1 - w2.bbox.y0)
+          return w2Area > 0 && overlapArea / w2Area > 0.3
+        })
+        if (!overlaps) merged.push(w2)
+      }
+
+      ocrLog(`OCR pass 1: ${words1.length} words, pass 2: ${words2.length} words, merged: ${merged.length}`)
 
       // Scale bounding boxes back to original resolution if we downscaled
       const bboxScale = realW > 1920 ? realW / 1920 : 1
 
       // ── Log: Raw Tesseract output ──
-      const allTessWords = (result.data.words || [])
+      const allTessWords = merged
       ocrLog(`Image: ${realW}x${realH}, bboxScale=${bboxScale.toFixed(2)}`)
       ocrLog(`Tesseract returned ${allTessWords.length} raw words`)
       ocrLogTable('Raw Tesseract words', allTessWords.map((w) => ({
@@ -481,7 +487,7 @@ export default function App() {
             if (letterCount === 1 && w.confidence >= 85) return true
             return false
           }
-          const minConf = cleaned.length <= 2 ? 70 : cleaned.length <= 3 ? 55 : 50
+          const minConf = cleaned.length <= 2 ? 65 : cleaned.length <= 3 ? 45 : 35
           if (w.confidence < minConf) {
             ocrLog(`[FILTERED conf] "${cleaned}" conf=${Math.round(w.confidence)} < ${minConf}`)
             return false
@@ -1824,7 +1830,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      style={S.app}
+      style={isOverlay ? { ...S.app, height: '100vh', overflow: 'hidden' } : S.app}
     >
       <input
         ref={fileInputRef}
@@ -2732,10 +2738,14 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
 
             {/* Image container */}
             <div
-              style={isOverlay ? { ...S.imageContainer, maxWidth: '100%', maxHeight: '100vh', borderRadius: 0, margin: 0 } : S.imageContainer}
+              style={isOverlay
+                ? { position: 'relative', overflow: 'hidden', width: '100vw', height: '100vh', background: '#000' }
+                : S.imageContainer}
               onClick={() => !isOverlay && stage === 'done' && ocrWords.length > 0 && setExpanded(true)}
             >
-              <img src={screenshot} alt="Screenshot" style={isOverlay ? { ...S.mainImage, maxHeight: '100vh', objectFit: 'fill' } : S.mainImage} />
+              <img src={screenshot} alt="Screenshot" style={isOverlay
+                ? { display: 'block', width: '100vw', height: '100vh', objectFit: 'fill' }
+                : S.mainImage} />
 
               {/* Word overlays */}
               {stage === 'done' && ocrWords.length > 0 && (
@@ -2846,7 +2856,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
               )}
             </div>
           </div>
-          {activeWord.category === 'foreign' && (
+          {activeWord.translation && (
             <div style={S.ttTrans}>→ {activeWord.translation}</div>
           )}
           {activeWord.category === 'name' && (

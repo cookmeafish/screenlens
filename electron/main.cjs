@@ -24,6 +24,13 @@ function createOverlay() {
   })
 
   overlayWindow.loadURL(VITE_URL + '?overlay=true')
+
+  // ESC / window.close() → hide instead of closing
+  overlayWindow.on('close', (e) => {
+    e.preventDefault()
+    overlayWindow.hide()
+  })
+
   overlayWindow.webContents.on('console-message', (_, l, m) => console.log('[Renderer]', m))
   overlayWindow.webContents.on('did-finish-load', () => console.log('[Overlay] Web app loaded'))
 }
