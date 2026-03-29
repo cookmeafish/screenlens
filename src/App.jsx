@@ -2651,7 +2651,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
       )}
 
       {/* ── Main Content ─────────────────────────────────────────────────────── */}
-      {!studyActive && !deckBrowserActive && <main style={S.main}>
+      {!studyActive && !deckBrowserActive && <main style={isOverlay ? { ...S.main, padding: 0 } : S.main}>
         {/* Empty state */}
         {stage === 'idle' && (
           <div style={S.emptyState}>
@@ -2732,10 +2732,10 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
 
             {/* Image container */}
             <div
-              style={S.imageContainer}
-              onClick={() => stage === 'done' && ocrWords.length > 0 && setExpanded(true)}
+              style={isOverlay ? { ...S.imageContainer, maxWidth: '100%', maxHeight: '100vh', borderRadius: 0, margin: 0 } : S.imageContainer}
+              onClick={() => !isOverlay && stage === 'done' && ocrWords.length > 0 && setExpanded(true)}
             >
-              <img src={screenshot} alt="Screenshot" style={S.mainImage} />
+              <img src={screenshot} alt="Screenshot" style={isOverlay ? { ...S.mainImage, maxHeight: '100vh', objectFit: 'fill' } : S.mainImage} />
 
               {/* Word overlays */}
               {stage === 'done' && ocrWords.length > 0 && (
@@ -2759,8 +2759,8 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                 </div>
               )}
 
-              {/* Expand hint */}
-              {stage === 'done' && ocrWords.length > 0 && (
+              {/* Expand hint (hidden in overlay) */}
+              {stage === 'done' && ocrWords.length > 0 && !isOverlay && (
                 <div style={S.hint}>
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
                     <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"
@@ -2772,7 +2772,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
             </div>
 
             {/* Stats bar */}
-            {stage === 'done' && (
+            {stage === 'done' && !isOverlay && (
               <div style={S.stats}>
                 <span style={S.stat}>{ocrWords.length} words</span>
                 <span style={{ ...S.stat, color: '#d2a8ff' }}>
