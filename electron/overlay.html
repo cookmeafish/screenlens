@@ -9,30 +9,24 @@
       background: #000;
       font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
     }
+
     #overlay-root {
-      position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-      z-index: 2;
-    }
-    #screenshot-bg {
-      position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-      object-fit: fill; z-index: 1; display: none;
+      width: 100vw; height: 100vh;
+      position: relative;
+      background-size: 100% 100%;
+      background-position: center;
+      background-repeat: no-repeat;
     }
 
     .word-box {
       position: absolute;
-      background: rgba(255,255,0,0.15);
-      border: 2px solid rgba(255,255,0,0.8);
-      border-radius: 2px;
+      background: rgba(255, 255, 0, 0.2);
+      border: 2px solid yellow;
       cursor: pointer;
-      transition: background 0.1s;
-      z-index: 3;
     }
     .word-box:hover {
-      background: rgba(255,255,0,0.35);
+      background: rgba(255, 255, 0, 0.45);
       border-color: #7ee787;
-    }
-    .word-label {
-      display: none;
     }
 
     .tooltip {
@@ -46,17 +40,11 @@
       max-width: 320px;
       z-index: 9999;
       box-shadow: 0 8px 24px rgba(0,0,0,0.6);
-      pointer-events: auto;
     }
     .tooltip .word { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
     .tooltip .translation { color: #58a6ff; font-size: 13px; margin-bottom: 6px; }
     .tooltip .pronunciation { color: #7ee787; font-size: 11px; margin-bottom: 4px; }
     .tooltip .synonyms { color: #7d8590; font-size: 11px; }
-    .tooltip .pos-tag {
-      display: inline-block; font-size: 9px; font-weight: 700;
-      text-transform: uppercase; letter-spacing: 0.08em;
-      padding: 2px 6px; border-radius: 3px; margin-left: 6px;
-    }
 
     .status-bar {
       position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
@@ -75,10 +63,7 @@
   </style>
 </head>
 <body>
-  <img id="screenshot-bg" />
   <div id="overlay-root"></div>
-  <script>console.log('[Overlay HTML] inline script works')</script>
   <script src="./overlay.js"></script>
-  <script>console.log('[Overlay HTML] overlay.js loaded successfully')</script>
 </body>
 </html>
