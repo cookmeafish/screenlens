@@ -392,6 +392,16 @@ function apiPlugin() {
         } else if (req.method === 'GET') {
           res.setHeader('Content-Type', 'application/json')
           res.end(JSON.stringify({ running: !!(overlayProcess && !overlayProcess.killed) }))
+        } else if (req.method === 'DELETE') {
+          res.setHeader('Content-Type', 'application/json')
+          if (overlayProcess && !overlayProcess.killed) {
+            overlayProcess.kill()
+            overlayProcess = null
+            console.log('[Overlay API] stopped')
+            res.end(JSON.stringify({ ok: true, status: 'stopped' }))
+          } else {
+            res.end(JSON.stringify({ ok: true, status: 'not running' }))
+          }
         } else { res.statusCode = 405; res.end('') }
       })
 

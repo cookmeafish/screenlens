@@ -1916,17 +1916,22 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
           </div>
 
           <button onClick={async () => {
-            console.log('[Overlay] launching...')
-            try {
-              const r = await fetch('/api/launch-overlay', { method: 'POST' })
-              const d = await r.json()
-              if (d.error) { alert(d.error) }
-              else {
-                setOverlayRunning(true)
-                console.log('[Overlay]', d.status)
+            if (overlayRunning) {
+              // Stop overlay
+              try {
+                await fetch('/api/launch-overlay', { method: 'DELETE' })
+                setOverlayRunning(false)
+              } catch {}
+            } else {
+              // Start overlay
+              try {
+                const r = await fetch('/api/launch-overlay', { method: 'POST' })
+                const d = await r.json()
+                if (d.error) { alert(d.error) }
+                else { setOverlayRunning(true) }
+              } catch (err) {
+                alert('Failed to launch overlay: ' + err.message)
               }
-            } catch (err) {
-              alert('Failed to launch overlay: ' + err.message)
             }
           }} style={{
             ...S.ghostBtn,
