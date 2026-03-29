@@ -154,7 +154,6 @@ function clearOverlay() {
   root.innerHTML = ''
   screenshotBg.style.display = 'none'
   screenshotBg.src = ''
-  document.body.classList.remove('active')
   if (currentTooltip) { currentTooltip.remove(); currentTooltip = null }
   hideStatus()
 }
@@ -264,7 +263,6 @@ async function processScreenshot(dataUrl) {
   clearOverlay()
 
   // Show frozen screenshot as backdrop immediately
-  document.body.classList.add('active')
   screenshotBg.src = dataUrl
   screenshotBg.style.display = 'block'
   showStatus('Processing screenshot...', true)

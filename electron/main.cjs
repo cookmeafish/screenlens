@@ -15,12 +15,12 @@ function createOverlay() {
 
   overlayWindow = new BrowserWindow({
     width, height, x: 0, y: 0,
-    transparent: true,
     frame: false,
     alwaysOnTop: true,
     skipTaskbar: true,
     resizable: false,
-    hasShadow: false,
+    fullscreen: true,
+    backgroundColor: '#000000',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
