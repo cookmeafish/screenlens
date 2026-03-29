@@ -394,8 +394,17 @@ function apiPlugin() {
           res.end(JSON.stringify({ running: !!(overlayProcess && !overlayProcess.killed) }))
         } else if (req.method === 'DELETE') {
           res.setHeader('Content-Type', 'application/json')
-          if (overlayProcess && !overlayProcess.killed) {
-            overlayProcess.kill()
+          if (overlayProcess) {
+            const pid = overlayProcess.pid
+            console.log('[Overlay API] killing pid:', pid)
+            try {
+              // Force kill on Windows
+              if (process.platform === 'win32') {
+                spawn('taskkill', ['/F', '/T', '/PID', String(pid)], { shell: true })
+              } else {
+                overlayProcess.kill('SIGKILL')
+              }
+            } catch (e) { console.error('[Overlay API] kill error:', e.message) }
             overlayProcess = null
             console.log('[Overlay API] stopped')
             res.end(JSON.stringify({ ok: true, status: 'stopped' }))
