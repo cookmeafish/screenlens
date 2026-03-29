@@ -409,12 +409,12 @@ export default function App() {
       await new Promise((resolve) => { dimImg.onload = resolve; dimImg.src = dataUrl })
       const realW = dimImg.naturalWidth, realH = dimImg.naturalHeight
 
-      // Downscale for OCR if wider than 1920px (speeds up Tesseract, display stays full-res)
+      // Downscale for OCR only if extremely wide (4K+) — keep detail for better detection
       let ocrInput = dataUrl
-      if (realW > 1920) {
-        const scale = 1920 / realW
+      if (realW > 3000) {
+        const scale = 2560 / realW
         const c = document.createElement('canvas')
-        c.width = 1920
+        c.width = 2560
         c.height = Math.round(realH * scale)
         const ctx = c.getContext('2d')
         const img = new Image()
@@ -465,7 +465,7 @@ export default function App() {
       ocrLog(`OCR pass 1: ${words1.length} words, pass 2: ${words2.length} words, merged: ${merged.length}`)
 
       // Scale bounding boxes back to original resolution if we downscaled
-      const bboxScale = realW > 1920 ? realW / 1920 : 1
+      const bboxScale = realW > 3000 ? realW / 2560 : 1
 
       // ── Log: Raw Tesseract output ──
       const allTessWords = merged
@@ -1751,37 +1751,24 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
   const renderWordOverlays = () => {
     if (!imgDims.w || !imgDims.h) return null
 
-    // Pre-compute corrected bboxes:
-    // 1. Estimate expected width from per-char metrics to fix narrow bboxes (e.g. "Tiempo" missing "o")
-    // 2. Clamp same-row overlaps so adjacent words don't visually bleed into each other
+    // Use raw Tesseract bboxes — no artificial inflation
+    // Just clamp same-row overlaps so adjacent words don't bleed
     const boxes = ocrWords.map((word) => {
-      let x0 = word.bbox.x0, y0 = word.bbox.y0, x1 = word.bbox.x1, y1 = word.bbox.y1
-      const bboxW = x1 - x0
-      const bboxH = y1 - y0
-      const charCount = word.text.length
-      if (charCount > 0 && bboxH > 0) {
-        // Expected width based on character count and height (typical char aspect ~0.55)
-        const expectedW = charCount * bboxH * 0.55
-        if (expectedW > bboxW * 1.15) {
-          // Bbox is suspiciously narrow for this word — extend right edge
-          x1 = Math.round(x0 + expectedW)
-        }
-      }
-      return { x0, y0, x1, y1 }
+      const { x0, y0, x1, y1 } = word.bbox
+      // Tighten vertically: reduce top/bottom padding (Tesseract includes line spacing)
+      const h = y1 - y0
+      const vPad = Math.round(h * 0.1)
+      return { x0, y0: y0 + vPad, x1, y1: y1 - vPad }
     })
 
-    // Clamp same-row overlaps: if two words overlap horizontally, trim the left one's right edge
+    // Clamp same-row overlaps
     for (let i = 0; i < boxes.length; i++) {
       for (let j = i + 1; j < boxes.length; j++) {
         const a = boxes[i], b = boxes[j]
         const avgH = ((a.y1 - a.y0) + (b.y1 - b.y0)) / 2
-        if (Math.abs(a.y0 - b.y0) > avgH * 0.5) continue // different row
-        // Same row — if they overlap, trim
-        if (a.x1 > b.x0 && a.x0 < b.x0) {
-          a.x1 = b.x0 - 1
-        } else if (b.x1 > a.x0 && b.x0 < a.x0) {
-          b.x1 = a.x0 - 1
-        }
+        if (Math.abs(a.y0 - b.y0) > avgH * 0.5) continue
+        if (a.x1 > b.x0 && a.x0 < b.x0) a.x1 = b.x0 - 1
+        else if (b.x1 > a.x0 && b.x0 < a.x0) b.x1 = a.x0 - 1
       }
     }
 
