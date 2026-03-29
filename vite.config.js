@@ -391,26 +391,35 @@ function apiPlugin() {
           }
         } else if (req.method === 'GET') {
           res.setHeader('Content-Type', 'application/json')
-          res.end(JSON.stringify({ running: !!(overlayProcess && !overlayProcess.killed) }))
+          // Check if any electron process is running (not just tracked one)
+          if (overlayProcess && !overlayProcess.killed) {
+            res.end(JSON.stringify({ running: true }))
+          } else if (process.platform === 'win32') {
+            const check = spawn('tasklist', ['/FI', 'IMAGENAME eq electron.exe', '/NH'], { shell: true })
+            let output = ''
+            check.stdout.on('data', d => output += d)
+            check.on('close', () => {
+              const running = output.includes('electron.exe')
+              res.end(JSON.stringify({ running }))
+            })
+          } else {
+            res.end(JSON.stringify({ running: false }))
+          }
         } else if (req.method === 'DELETE') {
           res.setHeader('Content-Type', 'application/json')
-          if (overlayProcess) {
-            const pid = overlayProcess.pid
-            console.log('[Overlay API] killing pid:', pid)
-            try {
-              // Force kill on Windows
-              if (process.platform === 'win32') {
-                spawn('taskkill', ['/F', '/T', '/PID', String(pid)], { shell: true })
-              } else {
-                overlayProcess.kill('SIGKILL')
-              }
-            } catch (e) { console.error('[Overlay API] kill error:', e.message) }
-            overlayProcess = null
-            console.log('[Overlay API] stopped')
-            res.end(JSON.stringify({ ok: true, status: 'stopped' }))
-          } else {
-            res.end(JSON.stringify({ ok: true, status: 'not running' }))
-          }
+          console.log('[Overlay API] stopping all electron processes')
+          try {
+            if (overlayProcess) {
+              overlayProcess.kill()
+              overlayProcess = null
+            }
+            // Force kill ALL electron processes on Windows
+            if (process.platform === 'win32') {
+              spawn('taskkill', ['/F', '/IM', 'electron.exe'], { shell: true })
+            }
+          } catch (e) { console.error('[Overlay API] kill error:', e.message) }
+          overlayProcess = null
+          res.end(JSON.stringify({ ok: true, status: 'stopped' }))
         } else { res.statusCode = 405; res.end('') }
       })
 
