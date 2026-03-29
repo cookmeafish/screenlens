@@ -4,6 +4,7 @@ import { TRANSLATE_PROMPT, POS_COLORS, CATEGORY_COLORS } from './config/prompts'
 import { PROVIDERS } from './config/providers'
 import { LANGS } from './config/languages'
 import FormattedText from './components/FormattedText'
+import HelpChat from './components/HelpChat'
 import { S } from './styles/theme'
 import { ocrLog, ocrLogTable, ocrLogFlush } from './utils/logger'
 import { ankiPing, ankiGetDecks, ankiCreateDeck, ankiAddNote, ankiFindCards, ankiCardsInfo, ankiAnswerCards, ankiGetDeckStats, ankiFindNotes, ankiNotesInfo, ankiUpdateNote, ankiDeleteNotes, ankiSync } from './utils/anki'
@@ -3133,6 +3134,9 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
           to { opacity: 1; }
         }
       `}</style>
+
+      {/* Floating AI Help Button */}
+      {!isOverlay && <HelpChat apiKey={apiKey} providerConfig={providerConfig} />}
     </div>
   )
 }

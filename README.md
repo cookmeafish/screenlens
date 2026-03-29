@@ -205,6 +205,17 @@ npm install electron --save-optional
 - Fullscreen exclusive games may not work; use borderless windowed mode
 - The Overlay button toggles on/off and auto-detects if Electron is running
 
+## AI Help Assistant
+
+A floating **?** button in the bottom-left corner provides an AI-powered help chat that knows the app inside and out.
+
+- Click the **?** button to open the help chat
+- Ask anything: "What does the overlay button do?", "How do I create flashcards?", "Can I use this with a game?"
+- Follow-up questions supported — it's a full conversation
+- Drag the button anywhere on screen to reposition it
+- Uses your configured AI provider and API key
+- Hidden in overlay mode to avoid interfering with gameplay
+
 ## Requirements
 
 - Node.js 18+
