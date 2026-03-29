@@ -6,14 +6,15 @@ A local learning app that captures your display, OCRs every word with pixel-prec
 
 - **Screen capture** — `Ctrl+Shift+S` to screenshot any window/display
 - **Paste / Upload / Drag-drop** — Alternative image input methods
-- **Pixel-accurate overlays** — Word bounding boxes from Tesseract OCR, not AI estimates
-- **Hover translations** — Hover any word on the image for translation + synonyms + pronunciation
-- **Learning modes** — Create AI-configured modes for any subject (languages, Security+, etc.)
-- **Anki integration** — Generate flashcards, sync to Anki, study with AI-powered quizzes
-- **Study sessions** — Interleaved multi-card quizzes with AI evaluation and Anki rating sync
-- **Knowledge base** — Upload reference materials per mode for smarter AI questions
-- **Grammar feedback** — Optional grammar/spelling correction in any language
-- **Overlay mode** — Transparent overlay on top of games/apps via Electron (optional)
+- **Dual-pass OCR** — Runs Tesseract on both preprocessed and original images, merging results for maximum word detection on complex backgrounds (game art, textured UIs)
+- **Pixel-accurate overlays** — Word bounding boxes from Tesseract OCR with hover translations, synonyms, pronunciation, and part of speech
+- **Learning modes** — Create AI-configured modes for any subject (languages, Security+, Organic Chemistry, etc.)
+- **Anki integration** — Generate AI-powered flashcards, sync to Anki and AnkiWeb, study with interleaved quizzes
+- **Study sessions** — Multi-card interleaved quizzes with AI-generated questions, evaluation, grammar feedback, and Anki spaced repetition rating
+- **Deck browser** — View, edit, search, and delete Anki flashcards directly in the app
+- **Knowledge base** — Upload .txt/.md reference materials per mode for smarter AI questions
+- **Grammar feedback** — Optional grammar/spelling correction in any quiz language
+- **Overlay mode** — Fullscreen overlay on top of games/apps via Electron (optional)
 - **Multi-provider AI** — Claude, GPT, Gemini, and Grok
 - **18 languages** — Spanish, French, German, Japanese, Korean, Chinese, Russian, Arabic, etc.
 
@@ -23,15 +24,19 @@ A local learning app that captures your display, OCRs every word with pixel-prec
 screenlens/
   src/                 ← React web app
   electron/            ← Optional Electron overlay companion
+    main.cjs           ← Electron main process
+    preload.cjs        ← IPC bridge
   modes/
-    Default/           ← Default mode template (committed)
+    Default/           ← Default mode template (committed to git)
     <your modes>/      ← Your custom modes (gitignored)
   vite.config.js       ← Dev server + API endpoints
 ```
 
-**Two-stage pipeline:**
-1. **Tesseract.js** — OCR engine returning pixel-accurate bounding boxes. Runs in-browser via WebAssembly.
-2. **AI Translation** — Receives extracted words, returns translations, synonyms, pronunciation, and part of speech.
+**Dual-pass OCR pipeline:**
+1. **Tesseract.js Pass 1** — High-contrast preprocessed image (grayscale, 2.5x contrast, dark-bg inversion). Good for clean text.
+2. **Tesseract.js Pass 2** — Original image. Catches text on complex/textured backgrounds that preprocessing destroys.
+3. **Merge** — Non-overlapping words from pass 2 are added to pass 1 results.
+4. **AI Translation** — Merged word list sent to AI for translation, synonyms, pronunciation, and part of speech.
 
 ## Setup
 
@@ -48,7 +53,7 @@ Opens at `http://localhost:3000`.
 
 1. Select your AI provider from the dropdown (Anthropic, OpenAI, Gemini, or Grok)
 2. Click **Key Set** and enter your API key
-3. Select source and target languages
+3. Select source and target languages (translation settings are separate from study quiz language)
 4. Capture or upload a screenshot
 
 ## Supported AI Providers
@@ -65,24 +70,47 @@ Opens at `http://localhost:3000`.
 ScreenLens supports multiple learning modes. Each mode has its own:
 - Anki card format (front/back templates, fields)
 - Tag generation rules
-- Study rules (question style, quiz language, grammar feedback)
+- Study rules (question prompt, quiz language, grammar feedback, cards at once)
 - Connected Anki deck
 - Knowledge base (reference materials)
+
+All settings are **per-mode** — changing Security+ settings doesn't affect Language Learning.
 
 ### Creating a mode
 
 1. Click the mode button in the toolbar (e.g., "Language Learning")
 2. Type what you want to learn (e.g., "CompTIA Security+", "Organic Chemistry")
-3. Click **Create** — AI generates the full mode configuration
-4. Click the gear icon to customize any settings
+3. Click **Create** — AI generates the full mode configuration (card format, tags, study questions)
+4. Click the **gear icon** to customize any settings
+5. Or click **+ Default Mode** to create a new Language Learning mode with defaults
 
 ### Mode settings
 
-Click the **gear icon** next to the mode name:
-- **Anki Settings** — connection, deck, card format, tag rules, study rules
-- **Knowledge Base** — upload .txt/.md reference materials for smarter AI questions
+Click the **gear icon** next to the mode name. Use the dropdown to select which mode to configure:
 
-All settings are per-mode and saved in `modes/<mode-name>/config.json`.
+- **Anki Settings** — connection status, deck selection, card format, tag rules, study rules
+  - **Card Format** — AI edit input, field toggles, front/back templates with placeholders
+  - **Tag Rules** — instructions for AI tag generation per card
+  - **Study Rules** — questions per card, cards at once, quiz language, grammar feedback toggle, AI question generation prompt
+- **Knowledge Base** — drag & drop .txt/.md files, enable/disable/delete individual files
+
+Mode configurations are saved in `modes/<mode-name>/config.json`.
+
+### Mode storage
+
+```
+modes/
+  Default/              ← Default template (committed to git)
+    config.json
+  Language Learning/    ← Your modes (gitignored)
+    config.json
+    knowledge/          ← Reference materials (optional)
+      vocab.txt
+  Security+/
+    config.json
+    knowledge/
+      chapter1.md
+```
 
 ## Anki Integration
 
@@ -96,40 +124,51 @@ All settings are per-mode and saved in `modes/<mode-name>/config.json`.
 ### Flashcard generation
 
 1. Click a translated word to pin it
-2. Click **Generate Anki Card** — AI creates a rich flashcard with pronunciation, definition, synonyms, and example sentence
-3. Click **Sync to Anki** — pushes to your selected deck and syncs to AnkiWeb
+2. Click **Explain** for a brief explanation
+3. Click **Generate Anki Card** — AI creates a rich flashcard with pronunciation, definition, synonyms, and example sentence
+4. Select target deck from dropdown in card preview
+5. Click **Sync to Anki** — pushes to Anki and syncs to AnkiWeb automatically
+
+Card format is AI-generated per mode and fully customizable via the Card Format settings.
 
 ### Study sessions
 
 1. Click **Study** in the toolbar
 2. Select mode, deck, quiz language, and grammar feedback toggle
 3. Click **Study Now** — AI generates questions from your Anki cards
-4. Answer questions — AI evaluates and rates each card (Easy/Good/Hard/Again)
-5. Ratings sync back to Anki's spaced repetition system
+4. Answer questions — AI evaluates each answer and rates the card
+5. Ratings (Easy/Good/Hard/Again) sync back to Anki's spaced repetition system and AnkiWeb
 
 Study features:
-- **Interleaved questions** — multiple cards at once, questions shuffled to prevent answer leakage
-- **Quiz language** — study in any language (questions and answers in that language)
-- **Grammar feedback** — optional toggle for grammar/spelling correction
-- **Knowledge base context** — AI uses your uploaded reference materials for smarter questions
+- **Interleaved questions** — multiple cards at once (default 3), questions shuffled randomly across cards to prevent answer leakage
+- **Quiz language** — study in any language (questions and answers generated in that language)
+- **Grammar feedback** — optional toggle for grammar/spelling correction (doesn't affect rating unless the grammar error is directly related to what the card tests)
+- **Knowledge base context** — AI uses your uploaded reference materials for more targeted questions
+- **Live Anki stats** — shows New/Learn/Due counts pulled live from Anki, updating after each card
 
 ### Deck browser
 
-Click **Deck** in the toolbar to view, edit, search, and delete flashcards directly in the app.
+Click **Deck** in the toolbar to:
+- View all flashcards in any deck
+- Search cards by content
+- Edit card fields inline (HTML converted to plain text for editing)
+- Delete cards with confirmation
+- Changes auto-sync to AnkiWeb
 
 ## Knowledge Base
 
-Each mode can have reference materials that the AI uses for context during study sessions.
+Each mode can have reference materials that the AI uses for context during study sessions and card generation.
 
 1. Click the gear icon → expand **Knowledge Base**
-2. Drag & drop `.txt` or `.md` files, or click to browse
-3. Files are loaded automatically when starting a study session
+2. Drag & drop `.txt` or `.md` files into the drop zone, or click to browse
+3. Files are listed with size, enable/disable toggle, and delete button
+4. Enabled files are loaded automatically when starting a study session
 
-Files are stored in `modes/<mode-name>/knowledge/` and can be enabled/disabled individually.
+Files are stored in `modes/<mode-name>/knowledge/` and can be managed entirely from the settings UI.
 
 ## Overlay Mode (Optional)
 
-A transparent overlay that sits on top of games and apps for real-time screen translation. Powered by Electron.
+A fullscreen overlay that sits on top of games and apps for seamless screen translation. The overlay loads the same web app — all features (hover, pin, explain, Anki) work identically.
 
 ### Setup
 
@@ -140,53 +179,62 @@ npm install electron --save-optional
 
 ### Usage
 
-**Option A — One-click from the web app:**
 1. Start the web app: `npm run dev`
-2. Click the **Overlay** button in the toolbar
+2. Click the **Overlay** button in the toolbar (or run `npm run overlay` in a separate terminal)
+3. The Overlay button turns green when active
+4. Switch to your game or app
+5. Press **Ctrl+Shift+S** — screen is captured and the overlay appears fullscreen with the frozen screenshot
+6. OCR + translation runs in the background — word boxes appear seamlessly on the frozen screenshot
+7. Hover words for translations, click to pin, all features available
+8. Press **ESC** to dismiss the overlay and return to your game
+9. Press **Ctrl+Shift+S** again anytime for a new capture
+10. Click the green Overlay button to stop Electron
 
-**Option B — Manual launch:**
-1. Start the web app: `npm run dev`
-2. In a separate terminal: `npm run overlay`
+### How it works
 
-**Using the overlay:**
-1. Switch to your game or app (borderless windowed mode recommended)
-2. Press **Ctrl+Shift+S** — screen is captured and translated words appear as a transparent overlay
-3. Hover words to see translations
-4. Press **ESC** to dismiss the overlay
+- Electron captures a screenshot via `desktopCapturer` and saves it as a PNG
+- The overlay window loads `localhost:3000?overlay=true` — the same web app with the header hidden
+- The web app auto-loads the screenshot and runs the full OCR/translation pipeline
+- The overlay covers the entire screen (including taskbar area) for a seamless frozen-screen illusion
+- ESC hides the overlay but Electron stays running for the next capture
 
-The overlay connects to the same Vite dev server, sharing your API keys, modes, and Anki connection. The web app works independently — the overlay is purely optional.
+### Notes
 
-**Note:** Fullscreen exclusive games may not work. Use borderless windowed mode.
+- The overlay shares the same Vite dev server — API keys, modes, Anki connection are all shared
+- The web app works independently in the browser — the overlay is purely optional
+- Fullscreen exclusive games may not work; use borderless windowed mode
+- The Overlay button toggles on/off and auto-detects if Electron is running
 
 ## Requirements
 
 - Node.js 18+
 - API key for at least one supported provider
 - Chrome/Edge/Brave recommended (Firefox works but screen capture may be limited)
-- Anki + AnkiConnect addon (for flashcard features)
+- Anki + AnkiConnect addon (for flashcard and study features)
 - Electron (optional, for overlay mode only)
 
 ## Project Structure
 
 ```
 src/
-  App.jsx              ← Main application component
-  components/          ← UI components
+  App.jsx              ← Main application component (~2800 lines)
+  components/
+    FormattedText.jsx   ← Rich text formatting for AI explanations
   config/
-    languages.js       ← Supported languages
-    prompts.js         ← Translation prompt + POS colors
-    providers.js       ← AI provider implementations
+    languages.js       ← 18 supported languages
+    prompts.js         ← Translation prompt + POS/category color maps
+    providers.js       ← AI provider implementations (Anthropic, OpenAI, Gemini, Grok)
   styles/
-    theme.js           ← Design system
+    theme.js           ← GitHub Dark design system (~100 style objects)
   utils/
-    anki.js            ← AnkiConnect API wrapper
+    anki.js            ← AnkiConnect API wrapper (ping, decks, cards, notes, sync)
     logger.js          ← OCR pipeline logging
 electron/
-  main.js              ← Electron main process
-  preload.js           ← IPC bridge
-  overlay.html         ← Overlay page
-  overlay.js           ← Overlay OCR + rendering
+  main.cjs             ← Electron main process (window, shortcuts, screenshot capture)
+  preload.cjs          ← IPC bridge (contextBridge)
 modes/
-  Default/             ← Default Language Learning config (committed)
-  <user modes>/        ← Custom modes (gitignored)
+  Default/             ← Default Language Learning config template (committed)
+    config.json
+  <user modes>/        ← Custom modes with per-mode configs + knowledge (gitignored)
+vite.config.js         ← Vite dev server + API endpoints (keys, config, modes, knowledge, anki proxy, overlay)
 ```
