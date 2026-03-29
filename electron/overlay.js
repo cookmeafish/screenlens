@@ -3,6 +3,7 @@
 
 const VITE_URL = 'http://localhost:3000'
 const root = document.getElementById('overlay-root')
+const screenshotBg = document.getElementById('screenshot-bg')
 
 let currentTooltip = null
 let statusEl = null
@@ -151,6 +152,8 @@ Output ONLY the raw JSON array. No markdown, no backticks.`
 // ─── Rendering ──────────────────────────────────────────────────────────────
 function clearOverlay() {
   root.innerHTML = ''
+  screenshotBg.style.display = 'none'
+  screenshotBg.src = ''
   if (currentTooltip) { currentTooltip.remove(); currentTooltip = null }
   hideStatus()
 }
@@ -253,6 +256,10 @@ function hideTooltip() {
 // ─── Main Flow ──────────────────────────────────────────────────────────────
 async function processScreenshot(dataUrl) {
   clearOverlay()
+
+  // Show frozen screenshot as backdrop immediately
+  screenshotBg.src = dataUrl
+  screenshotBg.style.display = 'block'
   showStatus('Processing screenshot...', true)
 
   try {
