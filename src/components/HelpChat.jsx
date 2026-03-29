@@ -28,6 +28,7 @@ export default function HelpChat({ apiKey }) {
   const dragOffset = useRef({ x: 0, y: 0 })
   const msgTopRef = useRef(null)
   const btnRef = useRef(null)
+  const inputRef = useRef(null)
 
   // Scroll to bottom on any new message (user or assistant)
   useEffect(() => {
@@ -88,6 +89,7 @@ export default function HelpChat({ apiKey }) {
       setMessages([...newMsgs, { role: 'assistant', text: 'Error: ' + err.message }])
     } finally {
       setLoading(false)
+      setTimeout(() => inputRef.current?.focus(), 50)
     }
   }
 
@@ -188,6 +190,8 @@ export default function HelpChat({ apiKey }) {
             {/* Input */}
             <div style={{ padding: '8px 10px', borderTop: '1px solid #2a3040', display: 'flex', gap: 6, flexShrink: 0 }}>
               <input
+                ref={inputRef}
+                autoFocus
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') sendMessage() }}
