@@ -30,6 +30,20 @@ function createOverlay() {
   overlayWindow.setIgnoreMouseEvents(true, { forward: true })
   overlayWindow.hide()
 
+  // Pipe renderer console to main process terminal
+  overlayWindow.webContents.on('console-message', (_, level, message) => {
+    console.log('[Renderer]', message)
+  })
+
+  // Log load errors
+  overlayWindow.webContents.on('did-fail-load', (_, code, desc) => {
+    console.error('[Overlay] Page load failed:', code, desc)
+  })
+
+  overlayWindow.webContents.on('did-finish-load', () => {
+    console.log('[Overlay] Page loaded successfully')
+  })
+
   // Open DevTools in development
   if (process.argv.includes('--dev')) {
     overlayWindow.webContents.openDevTools({ mode: 'detach' })

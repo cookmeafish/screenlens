@@ -170,8 +170,10 @@ function renderWords(words) {
   console.log('[Overlay] Scale:', scaleX.toFixed(3), 'x', scaleY.toFixed(3))
 
   let rendered = 0
+  let skipped = { noTranslation: 0, target: 0, number: 0, tooSmall: 0 }
   words.forEach((word) => {
-    if (!word.translation || word.category === 'target' || word.category === 'number') return
+    if (word.category === 'number') { skipped.number++; return }
+    if (!word.translation && !word.text) { skipped.noTranslation++; return }
 
     const x0 = Math.round(word.bbox.x0 * scaleX)
     const y0 = Math.round(word.bbox.y0 * scaleY)
@@ -180,7 +182,7 @@ function renderWords(words) {
     const w = x1 - x0
     const h = y1 - y0
 
-    if (w < 5 || h < 5) return // skip tiny boxes
+    if (w < 5 || h < 5) { skipped.tooSmall++; return }
 
     const box = document.createElement('div')
     box.className = 'word-box'
@@ -202,7 +204,7 @@ function renderWords(words) {
     rendered++
   })
 
-  console.log('[Overlay] Rendered', rendered, 'word boxes')
+  console.log('[Overlay] Rendered', rendered, 'word boxes. Skipped:', JSON.stringify(skipped))
   showStatus(`${rendered} words. Hover to see translations. ESC to close.`)
 
   if (rendered === 0 && words.length > 0) {
