@@ -8,4 +8,5 @@ modes/*
 !modes/Default/
 modes/_meta.json
 logs/
+electron/last-capture.png
 .claude/

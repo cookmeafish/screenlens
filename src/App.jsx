@@ -265,6 +265,30 @@ export default function App() {
       fetch('/api/launch-overlay').then(r => r.json()).then(d => setOverlayRunning(d.running)).catch(() => {})
     }, 3000)
 
+    // Overlay mode: listen for screenshot capture events from Electron
+    const handleOverlayCapture = async () => {
+      const url = window.__overlayScreenshot
+      if (!url) return
+      console.log('[Overlay] Loading screenshot from:', url)
+      try {
+        const resp = await fetch(url)
+        const blob = await resp.blob()
+        const reader = new FileReader()
+        reader.onload = (e) => {
+          loadImageFromDataUrl(e.target.result)
+          // Auto-start analysis after a short delay
+          setTimeout(() => {
+            const analyzeBtn = document.querySelector('[data-analyze]')
+            if (analyzeBtn) analyzeBtn.click()
+          }, 500)
+        }
+        reader.readAsDataURL(blob)
+      } catch (err) {
+        console.error('[Overlay] Failed to load screenshot:', err)
+      }
+    }
+    window.addEventListener('overlay-capture', handleOverlayCapture)
+
     // Check AnkiConnect on mount
     console.log('[Anki] checking connection on mount...')
     ankiPing().then((ok) => {
@@ -2701,6 +2725,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
               {stage === 'captured' && !loading && (
                 <div style={S.capturedOverlay}>
                   <button
+                    data-analyze="true"
                     onClick={(e) => { e.stopPropagation(); analyzeImage(screenshot) }}
                     style={S.bigBtn}
                   >

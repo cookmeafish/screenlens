@@ -414,6 +414,18 @@ function apiPlugin() {
         } else { res.statusCode = 405; res.end('') }
       })
 
+      // Serve overlay screenshot
+      server.middlewares.use('/api/overlay-screenshot', (req, res) => {
+        const file = path.resolve('electron/last-capture.png')
+        if (fs.existsSync(file)) {
+          res.setHeader('Content-Type', 'image/png')
+          res.end(fs.readFileSync(file))
+        } else {
+          res.statusCode = 404
+          res.end('')
+        }
+      })
+
       // Ensure directory endpoint
       server.middlewares.use('/api/ensure-dir', (req, res) => {
         if (req.method === 'POST') {
