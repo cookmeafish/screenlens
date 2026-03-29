@@ -54,8 +54,10 @@ function registerShortcuts() {
       fs.writeFileSync(SCREENSHOT_FILE, sources[0].thumbnail.toPNG())
       console.log('[Overlay] Screenshot saved')
 
+      // Cover entire screen including taskbar
+      const bounds = screen.getPrimaryDisplay().bounds
+      overlayWindow.setBounds({ x: 0, y: 0, width: bounds.width, height: bounds.height })
       overlayWindow.show()
-      overlayWindow.maximize()
       overlayWindow.setAlwaysOnTop(true, 'screen-saver')
       overlayWindow.focus()
 

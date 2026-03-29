@@ -62,12 +62,19 @@ export default function App() {
   // ─── State ───────────────────────────────────────────────────────────────────
   const isOverlay = new URLSearchParams(window.location.search).has('overlay')
 
-  // ESC closes overlay window
+  // ESC hides overlay (doesn't kill Electron — ready for next capture)
   useEffect(() => {
     if (!isOverlay) return
     const handleEsc = (e) => {
       if (e.key === 'Escape') {
-        window.close() // Electron will handle this
+        // Reset to idle so overlay is ready for next capture
+        setScreenshot(null)
+        setStage('idle')
+        setOcrWords([])
+        setPinnedIdx(null)
+        setHoveredIdx(null)
+        // Tell Electron to hide the window
+        try { window.close() } catch {}
       }
     }
     window.addEventListener('keydown', handleEsc)
@@ -2727,9 +2734,9 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
 
         {/* Image + overlays */}
         {screenshot && (
-          <div style={{ animation: 'fadeUp 0.25s ease', textAlign: 'center' }}>
-            {/* Progress indicator */}
-            {loading && (
+          <div style={isOverlay ? {} : { animation: 'fadeUp 0.25s ease', textAlign: 'center' }}>
+            {/* Progress indicator (hidden in overlay — screenshot stays fullscreen) */}
+            {loading && !isOverlay && (
               <div style={S.progressBar}>
                 <div style={S.progressDot} />
                 <span style={S.progressText}>{progress}</span>
@@ -2753,7 +2760,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
               )}
 
               {/* Analyze button overlay */}
-              {stage === 'captured' && !loading && (
+              {stage === 'captured' && !loading && !isOverlay && (
                 <div style={S.capturedOverlay}>
                   <button
                     data-analyze="true"
