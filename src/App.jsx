@@ -1587,8 +1587,16 @@ Output ONLY raw JSON. No markdown, no backticks.`
         const updated = await ankiGetDecks().catch(() => [])
         setAnkiDecks(updated)
       }
-      // Convert newlines to <br> for proper Anki formatting
-      const ankiBack = ankiCard.back.replace(/\n/g, '<br>')
+      // Convert to rich HTML for Anki
+      const ankiBack = ankiCard.back
+        .split('\n')
+        .map(line => {
+          // Bold the label before the colon
+          const match = line.match(/^([A-Za-zÁÉÍÓÚáéíóúñÑ\s]+):(.*)$/)
+          if (match) return `<b>${match[1]}:</b>${match[2]}`
+          return line
+        })
+        .join('<br>')
       const noteId = await ankiAddNote(ankiDeck, ankiCard.front, ankiBack, ankiCard.tags)
       console.log('[Anki] card synced successfully, noteId:', noteId, 'deck:', ankiDeck)
       // Sync to AnkiWeb
@@ -3136,7 +3144,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
       `}</style>
 
       {/* Floating AI Help Button */}
-      {!isOverlay && <HelpChat apiKey={apiKey} providerConfig={providerConfig} />}
+      {!isOverlay && <HelpChat apiKey={apiKey} />}
     </div>
   )
 }
