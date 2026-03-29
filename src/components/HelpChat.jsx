@@ -30,13 +30,23 @@ export default function HelpChat({ apiKey }) {
   const btnRef = useRef(null)
   const inputRef = useRef(null)
 
-  // Scroll to bottom on any new message (user or assistant)
+  // Scroll: user messages → scroll to bottom; assistant messages → scroll to start of reply
   useEffect(() => {
-    if (msgTopRef.current) {
-      setTimeout(() => {
-        if (msgTopRef.current) msgTopRef.current.scrollTop = msgTopRef.current.scrollHeight
-      }, 50)
-    }
+    if (!msgTopRef.current || messages.length === 0) return
+    const last = messages[messages.length - 1]
+    setTimeout(() => {
+      if (!msgTopRef.current) return
+      if (last.role === 'user') {
+        // User sent a message — scroll to bottom so they see their message
+        msgTopRef.current.scrollTop = msgTopRef.current.scrollHeight
+      } else {
+        // AI replied — scroll so the START of the reply is visible
+        const els = msgTopRef.current.querySelectorAll('[data-msg]')
+        if (els.length > 0) {
+          els[els.length - 1].scrollIntoView({ behavior: 'smooth', block: 'start' })
+        }
+      }
+    }, 50)
   }, [messages])
 
   // Draggable
