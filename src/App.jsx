@@ -38,8 +38,8 @@ async function preprocessForOCR(dataUrl) {
       const avgBrightness = totalBrightness / pixelCount
       const isDark = avgBrightness < 128
 
-      // Step 3: Strong contrast enhancement (2.5x for better text extraction)
-      const factor = 2.5
+      // Step 3: Moderate contrast enhancement (1.8x — 2.5 was crushing details)
+      const factor = 1.8
       for (let i = 0; i < d.length; i += 4) {
         const val = (d[i] - 128) * factor + 128
         d[i] = d[i + 1] = d[i + 2] = Math.max(0, Math.min(255, val))
@@ -195,6 +195,7 @@ export default function App() {
 
   const fileInputRef = useRef(null)
   const containerRef = useRef(null)
+  const cancelRef = useRef(false)
 
   const apiKey = apiKeys[provider] || ''
   const providerConfig = PROVIDERS[provider]
@@ -395,6 +396,7 @@ export default function App() {
       return
     }
 
+    cancelRef.current = false
     setLoading(true)
     setStage('ocr')
     setError(null)
@@ -423,46 +425,45 @@ export default function App() {
         ocrInput = c.toDataURL('image/png')
       }
 
-      // Run OCR on both original and preprocessed for better coverage
-      setProgress('Preprocessing image…')
+      // Dual-pass OCR with cancel support
+      setProgress('Preprocessing…')
       const preprocessed = await preprocessForOCR(ocrInput)
+      if (cancelRef.current) return
 
       const ocrLang = language === 'auto' ? 'eng+spa+fra+deu+por+ita' : language
 
-      // Pass 1: Preprocessed image (good for clean text)
-      setProgress('OCR pass 1 (preprocessed)…')
-      const result1 = await Tesseract.recognize(preprocessed, ocrLang, {
-        logger: (m) => {
-          if (m.status === 'recognizing text') setProgress(`OCR pass 1: ${Math.round((m.progress || 0) * 100)}%`)
-        },
-      })
-
-      // Pass 2: Original image (catches text on complex backgrounds)
-      setProgress('OCR pass 2 (original)…')
-      const result2 = await Tesseract.recognize(ocrInput, ocrLang, {
-        logger: (m) => {
-          if (m.status === 'recognizing text') setProgress(`OCR pass 2: ${Math.round((m.progress || 0) * 100)}%`)
-        },
-      })
-
-      // Merge results — take all words from pass 1, add unique words from pass 2
-      const words1 = result1.data.words || []
-      const words2 = result2.data.words || []
-      const merged = [...words1]
-
-      // Add words from pass 2 that don't overlap with pass 1
-      for (const w2 of words2) {
-        const overlaps = words1.some((w1) => {
-          const overlapX = Math.max(0, Math.min(w1.bbox.x1, w2.bbox.x1) - Math.max(w1.bbox.x0, w2.bbox.x0))
-          const overlapY = Math.max(0, Math.min(w1.bbox.y1, w2.bbox.y1) - Math.max(w1.bbox.y0, w2.bbox.y0))
-          const overlapArea = overlapX * overlapY
-          const w2Area = (w2.bbox.x1 - w2.bbox.x0) * (w2.bbox.y1 - w2.bbox.y0)
-          return w2Area > 0 && overlapArea / w2Area > 0.3
-        })
-        if (!overlaps) merged.push(w2)
+      // Helper to merge non-overlapping words
+      const mergeWords = (existing, newWords) => {
+        for (const w2 of newWords) {
+          const overlaps = existing.some((w1) => {
+            const ox = Math.max(0, Math.min(w1.bbox.x1, w2.bbox.x1) - Math.max(w1.bbox.x0, w2.bbox.x0))
+            const oy = Math.max(0, Math.min(w1.bbox.y1, w2.bbox.y1) - Math.max(w1.bbox.y0, w2.bbox.y0))
+            const area2 = (w2.bbox.x1 - w2.bbox.x0) * (w2.bbox.y1 - w2.bbox.y0)
+            return area2 > 0 && (ox * oy) / area2 > 0.3
+          })
+          if (!overlaps) existing.push(w2)
+        }
       }
 
-      ocrLog(`OCR pass 1: ${words1.length} words, pass 2: ${words2.length} words, merged: ${merged.length}`)
+      // Pass 1: Preprocessed (high contrast)
+      setProgress('OCR pass 1…')
+      const r1 = await Tesseract.recognize(preprocessed, ocrLang, {
+        logger: (m) => { if (m.status === 'recognizing text') setProgress(`OCR 1: ${Math.round((m.progress || 0) * 100)}%`) },
+      })
+      if (cancelRef.current) return
+
+      // Pass 2: Original image
+      setProgress('OCR pass 2…')
+      const r2 = await Tesseract.recognize(ocrInput, ocrLang, {
+        logger: (m) => { if (m.status === 'recognizing text') setProgress(`OCR 2: ${Math.round((m.progress || 0) * 100)}%`) },
+      })
+      if (cancelRef.current) return
+
+      // Merge all passes
+      const merged = [...(r1.data.words || [])]
+      mergeWords(merged, r2.data.words || [])
+
+      ocrLog(`OCR pass 1: ${(r1.data.words||[]).length}, pass 2: ${(r2.data.words||[]).length}, merged: ${merged.length}`)
 
       // Scale bounding boxes back to original resolution if we downscaled
       const bboxScale = realW > 3000 ? realW / 2560 : 1
@@ -580,6 +581,7 @@ export default function App() {
       }
 
       // ── Stage 2: AI Translation ────────────────────────────────────────────
+      if (cancelRef.current) return
       setStage('translating')
       setProgress(`Found ${finalWords.length} words. Translating…`)
 
@@ -792,7 +794,13 @@ export default function App() {
       }
       // Escape → Dismiss pin first, then close expanded view
       if (e.key === 'Escape') {
-        if (pinnedIdx !== null) {
+        if (loading) {
+          // Cancel ongoing analysis
+          cancelRef.current = true
+          setLoading(false)
+          setStage(screenshot ? 'captured' : 'idle')
+          setProgress('')
+        } else if (pinnedIdx !== null) {
           dismissPin()
         } else {
           setExpanded(false)
@@ -2730,9 +2738,13 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
           <div style={isOverlay ? {} : { animation: 'fadeUp 0.25s ease', textAlign: 'center' }}>
             {/* Progress indicator */}
             {loading && !isOverlay && (
-              <div style={S.progressBar}>
+              <div style={{ ...S.progressBar, display: 'flex', alignItems: 'center', gap: 8 }}>
                 <div style={S.progressDot} />
                 <span style={S.progressText}>{progress}</span>
+                <button onClick={() => { cancelRef.current = true; setLoading(false); setStage('captured') }}
+                  style={{ background: 'none', border: '1px solid #484f58', color: '#7d8590', borderRadius: 4, padding: '2px 8px', fontSize: 10, cursor: 'pointer', fontFamily: 'inherit' }}>
+                  Cancel
+                </button>
               </div>
             )}
             {/* Overlay progress — floating bottom bar */}
@@ -2746,6 +2758,8 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
               }}>
                 <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#58a6ff', animation: 'pulse 1.5s ease infinite' }} />
                 {progress}
+                <span onClick={() => { cancelRef.current = true; setLoading(false); setStage('captured') }}
+                  style={{ cursor: 'pointer', color: '#f85149', marginLeft: 4 }}>Cancel</span>
               </div>
             )}
 
