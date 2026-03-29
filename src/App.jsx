@@ -62,23 +62,18 @@ export default function App() {
   // ─── State ───────────────────────────────────────────────────────────────────
   const isOverlay = new URLSearchParams(window.location.search).has('overlay')
 
-  // ESC hides overlay (doesn't kill Electron — ready for next capture)
+  // ESC hides overlay — Electron handles the actual window hiding via global shortcut
+  // This just resets the web app state so it's ready for the next capture
   useEffect(() => {
     if (!isOverlay) return
     const handleEsc = (e) => {
       if (e.key === 'Escape') {
-        // Reset to idle so overlay is ready for next capture
-        setScreenshot(null)
-        setStage('idle')
-        setOcrWords([])
-        setPinnedIdx(null)
-        setHoveredIdx(null)
-        // Tell Electron to hide the window
-        try { window.close() } catch {}
+        e.preventDefault()
+        e.stopPropagation()
       }
     }
-    window.addEventListener('keydown', handleEsc)
-    return () => window.removeEventListener('keydown', handleEsc)
+    window.addEventListener('keydown', handleEsc, true)
+    return () => window.removeEventListener('keydown', handleEsc, true)
   }, [isOverlay])
   const [provider, setProvider] = useState('anthropic')
   const [configLoaded, setConfigLoaded] = useState(false)
@@ -1591,7 +1586,9 @@ Output ONLY raw JSON. No markdown, no backticks.`
         const updated = await ankiGetDecks().catch(() => [])
         setAnkiDecks(updated)
       }
-      const noteId = await ankiAddNote(ankiDeck, ankiCard.front, ankiCard.back, ankiCard.tags)
+      // Convert newlines to <br> for proper Anki formatting
+      const ankiBack = ankiCard.back.replace(/\n/g, '<br>')
+      const noteId = await ankiAddNote(ankiDeck, ankiCard.front, ankiBack, ankiCard.tags)
       console.log('[Anki] card synced successfully, noteId:', noteId, 'deck:', ankiDeck)
       // Sync to AnkiWeb
       ankiSync().catch((err) => console.warn('[Anki] AnkiWeb sync failed:', err.message))
@@ -2665,8 +2662,8 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
 
       {/* ── Main Content ─────────────────────────────────────────────────────── */}
       {!studyActive && !deckBrowserActive && <main style={isOverlay ? { ...S.main, padding: 0 } : S.main}>
-        {/* Empty state */}
-        {stage === 'idle' && (
+        {/* Empty state (hidden in overlay) */}
+        {stage === 'idle' && !isOverlay && (
           <div style={S.emptyState}>
             <div style={{ opacity: 0.15, marginBottom: 24 }}>
               <svg width="72" height="72" viewBox="0 0 24 24" fill="none">
@@ -2735,11 +2732,24 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
         {/* Image + overlays */}
         {screenshot && (
           <div style={isOverlay ? {} : { animation: 'fadeUp 0.25s ease', textAlign: 'center' }}>
-            {/* Progress indicator (hidden in overlay — screenshot stays fullscreen) */}
+            {/* Progress indicator */}
             {loading && !isOverlay && (
               <div style={S.progressBar}>
                 <div style={S.progressDot} />
                 <span style={S.progressText}>{progress}</span>
+              </div>
+            )}
+            {/* Overlay progress — floating bottom bar */}
+            {loading && isOverlay && (
+              <div style={{
+                position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)',
+                background: 'rgba(22,27,34,0.95)', border: '1px solid #2a3040',
+                borderRadius: 8, padding: '8px 16px', zIndex: 9999,
+                display: 'flex', alignItems: 'center', gap: 8,
+                color: '#7d8590', fontSize: 11,
+              }}>
+                <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#58a6ff', animation: 'pulse 1.5s ease infinite' }} />
+                {progress}
               </div>
             )}
 

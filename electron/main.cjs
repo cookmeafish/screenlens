@@ -36,6 +36,14 @@ function createOverlay() {
 }
 
 function registerShortcuts() {
+  // ESC hides overlay — window stays loaded for instant next capture
+  globalShortcut.register('Escape', () => {
+    if (overlayWindow && overlayWindow.isVisible()) {
+      console.log('[Overlay] ESC — hiding')
+      overlayWindow.hide()
+    }
+  })
+
   globalShortcut.register('CommandOrControl+Shift+S', async () => {
     console.log('[Overlay] Capture triggered')
     if (overlayWindow.isVisible()) {

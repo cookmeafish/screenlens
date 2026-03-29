@@ -424,6 +424,16 @@ function apiPlugin() {
       })
 
       // Serve overlay screenshot
+      // Hide overlay window (called by ESC in overlay mode)
+      server.middlewares.use('/api/overlay-hide', (req, res) => {
+        if (req.method === 'POST') {
+          res.setHeader('Content-Type', 'application/json')
+          // The overlay window will hide itself — Electron process stays running
+          console.log('[Overlay API] hide requested')
+          res.end('{"ok":true}')
+        } else { res.statusCode = 405; res.end('') }
+      })
+
       server.middlewares.use('/api/overlay-screenshot', (req, res) => {
         const file = path.resolve('electron/last-capture.png')
         if (fs.existsSync(file)) {
