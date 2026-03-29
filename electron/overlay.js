@@ -172,6 +172,12 @@ function renderWords(words) {
   console.log('[Overlay] Screen:', screenW, 'x', screenH)
   console.log('[Overlay] Scale:', scaleX.toFixed(3), 'x', scaleY.toFixed(3))
 
+  // DEBUG: Add a test box to prove rendering works
+  const testBox = document.createElement('div')
+  testBox.style.cssText = 'position:absolute; left:100px; top:100px; width:300px; height:40px; background:red; border:3px solid white; z-index:999; color:white; font-size:16px; font-weight:bold; padding:8px; pointer-events:auto;'
+  testBox.textContent = `DEBUG: ${words.length} words, screen ${screenW}x${screenH}, scale ${scaleX.toFixed(2)}x${scaleY.toFixed(2)}`
+  root.appendChild(testBox)
+
   let rendered = 0
   let skipped = { noTranslation: 0, target: 0, number: 0, tooSmall: 0 }
   words.forEach((word) => {
@@ -204,6 +210,9 @@ function renderWords(words) {
     box.addEventListener('mouseleave', () => hideTooltip())
 
     root.appendChild(box)
+    if (rendered < 3) {
+      console.log(`[Overlay] Box #${rendered}: "${word.text}" → "${word.translation}" at (${x0},${y0}) ${w}x${h}px, style: ${box.style.cssText}`)
+    }
     rendered++
   })
 
