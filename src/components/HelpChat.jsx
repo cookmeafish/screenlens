@@ -28,24 +28,14 @@ export default function HelpChat({ apiKey }) {
   const dragOffset = useRef({ x: 0, y: 0 })
   const msgTopRef = useRef(null)
   const btnRef = useRef(null)
-  const lastMsgCount = useRef(0)
 
-  // Scroll to top of latest assistant reply
+  // Scroll to bottom on any new message (user or assistant)
   useEffect(() => {
-    if (messages.length > lastMsgCount.current && messages.length > 0) {
-      const last = messages[messages.length - 1]
-      if (last.role === 'assistant' && msgTopRef.current) {
-        msgTopRef.current.scrollTop = msgTopRef.current.scrollHeight
-        // Find the last assistant message element and scroll it into view at the top
-        setTimeout(() => {
-          const els = msgTopRef.current?.querySelectorAll('[data-msg]')
-          if (els && els.length > 0) {
-            els[els.length - 1].scrollIntoView({ behavior: 'smooth', block: 'start' })
-          }
-        }, 50)
-      }
+    if (msgTopRef.current) {
+      setTimeout(() => {
+        if (msgTopRef.current) msgTopRef.current.scrollTop = msgTopRef.current.scrollHeight
+      }, 50)
     }
-    lastMsgCount.current = messages.length
   }, [messages])
 
   // Draggable
@@ -101,26 +91,33 @@ export default function HelpChat({ apiKey }) {
     }
   }
 
-  // Smart positioning: chat opens toward screen center from button position
-  const getBtnPos = () => {
-    const bx = pos.x
-    const by = pos.y !== null ? pos.y : window.innerHeight - 64
-    return { bx, by }
-  }
-
-  const getChatPos = () => {
-    const { bx, by } = getBtnPos()
+  // Position chat snug to button, opening toward available space
+  const getChatStyle = () => {
+    const rect = btnRef.current?.getBoundingClientRect()
+    if (!rect) return {}
     const chatW = 340, chatH = 400
-    // Horizontal: open right if button is on left half, left if on right
-    const openRight = bx < window.innerWidth / 2
-    const left = openRight ? bx : bx - chatW + 44
-    // Vertical: open up if button is on bottom half, down if on top
-    const openUp = by > window.innerHeight / 2
-    const top = openUp ? by - chatH - 10 : by + 54
-    return { left: Math.max(5, Math.min(left, window.innerWidth - chatW - 5)), top: Math.max(5, Math.min(top, window.innerHeight - chatH - 5)) }
-  }
+    const btnCX = rect.left + rect.width / 2
+    const btnCY = rect.top + rect.height / 2
+    const style = { position: 'fixed', width: chatW, maxHeight: chatH }
 
-  const btnPos = getBtnPos()
+    // Horizontal: align left edge with button, or right-align if near right edge
+    if (btnCX < window.innerWidth / 2) {
+      style.left = rect.left
+    } else {
+      style.left = rect.right - chatW
+    }
+    style.left = Math.max(5, Math.min(style.left, window.innerWidth - chatW - 5))
+
+    // Vertical: open above button if in bottom half, below if in top half
+    if (btnCY > window.innerHeight / 2) {
+      // Button is in bottom half — chat goes above, bottom edge snug to button top
+      style.bottom = window.innerHeight - rect.top + 8
+    } else {
+      // Button is in top half — chat goes below, top edge snug to button bottom
+      style.top = rect.bottom + 8
+    }
+    return style
+  }
 
   return (
     <>
@@ -147,11 +144,10 @@ export default function HelpChat({ apiKey }) {
       </button>
 
       {open && (() => {
-        const chatPos = getChatPos()
+        const chatStyle = getChatStyle()
         return (
           <div style={{
-            position: 'fixed', left: chatPos.left, top: chatPos.top,
-            width: 340, maxHeight: 400,
+            ...chatStyle,
             background: '#161b22', border: '1px solid #2a3040',
             borderRadius: 10, overflow: 'hidden',
             display: 'flex', flexDirection: 'column',
