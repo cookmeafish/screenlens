@@ -5,7 +5,9 @@
 ### Core Translation (Phase 1-3) ✅
 - Two-stage OCR + AI translation pipeline
 - Dual-pass OCR (preprocessed + original image, merged results)
-- Pixel-accurate word bounding boxes with hover translations
+- Tight-fitting word bounding boxes with hover translations
+- ESC to cancel ongoing OCR/translation
+- Cancel button in progress bar
 - Multi-provider AI support (Claude, GPT, Gemini, Grok)
 - 18 language support
 - Screen capture, paste, upload, drag-drop
@@ -47,18 +49,34 @@
 ### Overlay Mode (Phase 9) ✅
 - Electron companion app (optional, same repo)
 - One-click launch/stop from toolbar with green/grey status indicator
+- Auto-detects running state on page load (immediate check + 3s polling)
 - Ctrl+Shift+S screen capture via desktopCapturer
 - Loads actual web app (localhost:3000?overlay=true) — no code duplication
 - Fullscreen overlay covering entire screen including taskbar
-- Seamless processing (no progress bar, screenshot stays fullscreen)
-- ESC to dismiss (Electron stays running for next capture)
+- Floating progress indicator during OCR in overlay mode
+- ESC to dismiss (Electron global shortcut, stays running for next capture)
 - All web app features available (hover, pin, explain, Anki)
 - Process detection via tasklist, forceful kill via taskkill
+
+### AI Help Assistant ✅
+- Draggable floating ? button (repositionable anywhere on screen)
+- AI chat powered by Claude Sonnet for high-quality brief answers
+- Comprehensive app knowledge embedded as system context
+- Smart positioning: chat opens toward available screen space
+- Auto-scroll to start of AI replies
+- Input stays focused during and after AI responses
+- Hidden in overlay mode
+
+### Anki Card Formatting ✅
+- Bold HTML labels (Pronunciación, Traducción, etc.)
+- Proper line breaks between sections
+- Rich formatting preserved in Anki desktop and mobile
 
 ## Future Improvements
 
 ### OCR Quality
 - Consider Claude Vision API as alternative/supplement to Tesseract for complex game backgrounds
+- Region selection (drag to select area to translate instead of full screen)
 - Multi-resolution OCR passes for different text sizes
 - Text region detection before OCR to focus on text areas
 

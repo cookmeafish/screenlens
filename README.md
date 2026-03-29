@@ -6,15 +6,18 @@ A local learning app that captures your display, OCRs every word with pixel-prec
 
 - **Screen capture** — `Ctrl+Shift+S` to screenshot any window/display
 - **Paste / Upload / Drag-drop** — Alternative image input methods
+- **Cancel anytime** — Press ESC or click Cancel to stop OCR/translation mid-process
 - **Dual-pass OCR** — Runs Tesseract on both preprocessed and original images, merging results for maximum word detection on complex backgrounds (game art, textured UIs)
-- **Pixel-accurate overlays** — Word bounding boxes from Tesseract OCR with hover translations, synonyms, pronunciation, and part of speech
+- **Tight word boxes** — Bounding boxes fit snugly around detected words, no bloat
+- **Pixel-accurate overlays** — Hover any word for translation, pronunciation, synonyms, and part of speech
 - **Learning modes** — Create AI-configured modes for any subject (languages, Security+, Organic Chemistry, etc.)
-- **Anki integration** — Generate AI-powered flashcards, sync to Anki and AnkiWeb, study with interleaved quizzes
+- **Anki integration** — Generate AI-powered flashcards with proper HTML formatting (bold labels, line breaks), sync to Anki and AnkiWeb
 - **Study sessions** — Multi-card interleaved quizzes with AI-generated questions, evaluation, grammar feedback, and Anki spaced repetition rating
 - **Deck browser** — View, edit, search, and delete Anki flashcards directly in the app
 - **Knowledge base** — Upload .txt/.md reference materials per mode for smarter AI questions
 - **Grammar feedback** — Optional grammar/spelling correction in any quiz language
 - **Overlay mode** — Fullscreen overlay on top of games/apps via Electron (optional)
+- **AI Help Assistant** — Draggable floating ? button with built-in AI chat that knows the entire app
 - **Multi-provider AI** — Claude, GPT, Gemini, and Grok
 - **18 languages** — Spanish, French, German, Japanese, Korean, Chinese, Russian, Arabic, etc.
 
@@ -55,6 +58,7 @@ Opens at `http://localhost:3000`.
 2. Click **Key Set** and enter your API key
 3. Select source and target languages (translation settings are separate from study quiz language)
 4. Capture or upload a screenshot
+5. Press **ESC** at any time to cancel an in-progress OCR/translation
 
 ## Supported AI Providers
 
