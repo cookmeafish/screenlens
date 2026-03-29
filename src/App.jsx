@@ -244,10 +244,10 @@ export default function App() {
       setKeysLoaded(true)
       setConfigLoaded(true)
     })
-    // Poll overlay status
-    const overlayPoll = setInterval(() => {
-      fetch('/api/launch-overlay').then(r => r.json()).then(d => setOverlayRunning(d.running)).catch(() => {})
-    }, 3000)
+    // Check overlay status immediately and poll
+    const checkOverlay = () => fetch('/api/launch-overlay').then(r => r.json()).then(d => setOverlayRunning(d.running)).catch(() => {})
+    checkOverlay()
+    const overlayPoll = setInterval(checkOverlay, 3000)
 
     // Overlay mode: listen for screenshot capture events from Electron
     const handleOverlayCapture = async () => {
