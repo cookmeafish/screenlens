@@ -97,6 +97,10 @@ export default function App() {
   const [hoveredIdx, setHoveredIdx] = useState(null)
   const [pinnedIdx, setPinnedIdx] = useState(null)
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 })
+  const [pinnedTooltipPos, setPinnedTooltipPos] = useState(() => {
+    try { const s = localStorage.getItem('screenlens-tooltip-pos'); return s ? JSON.parse(s) : null } catch { return null }
+  })
+  const tooltipDragRef = useRef(null)
   const [explanation, setExplanation] = useState(null)
   const [explaining, setExplaining] = useState(false)
   const [deepExplanation, setDeepExplanation] = useState(null)
@@ -1151,6 +1155,39 @@ export default function App() {
       setChatInput('')
       const rect = e.currentTarget.getBoundingClientRect()
       setTooltipPos({ x: rect.left + rect.width / 2, y: rect.top - 6 })
+      // In overlay with small window (area-select), expand window to show tooltip
+      if (isOverlay && window.innerWidth < screen.width * 0.8 && window.overlayAPI?.resizeWindow) {
+        const screenW = screen.width, screenH = screen.height
+        // Expand to cover enough space for the tooltip
+        const curX = window.screenX, curY = window.screenY
+        const curW = window.innerWidth, curH = window.innerHeight
+        const tooltipW = 420, tooltipH = 500
+        // Position tooltip to the right of the selection, or left if no room
+        let ttX, ttY
+        if (curX + curW + tooltipW + 20 < screenW) {
+          ttX = curW + 10
+          ttY = 10
+        } else if (curX - tooltipW - 20 > 0) {
+          ttX = -tooltipW - 10
+          ttY = 10
+        } else {
+          ttX = 10
+          ttY = curH + 10
+        }
+        // Compute new window bounds to contain both selection and tooltip
+        const newX = Math.max(0, Math.min(curX, curX + ttX))
+        const newY = Math.max(0, Math.min(curY, curY + ttY))
+        const newRight = Math.min(screenW, Math.max(curX + curW, curX + ttX + tooltipW))
+        const newBottom = Math.min(screenH, Math.max(curY + curH, curY + ttY + tooltipH))
+        window.overlayAPI.resizeWindow({ x: newX, y: newY, width: newRight - newX, height: newBottom - newY })
+        // Set tooltip position relative to new window origin
+        const savedPos = pinnedTooltipPos
+        const relTtX = (curX - newX) + (ttX > 0 ? curW + 10 : ttX < 0 ? -tooltipW + curW : 10)
+        const relTtY = (curY - newY) + (ttY > curH ? curH + 10 : 10)
+        setPinnedTooltipPos(savedPos || { x: Math.max(10, relTtX), y: Math.max(10, relTtY) })
+      } else if (!pinnedTooltipPos) {
+        setPinnedTooltipPos({ x: Math.max(10, rect.left - 100), y: Math.max(10, rect.bottom + 10) })
+      }
       // Lazy translate if in click mode and word hasn't been translated yet
       if (ocrWords[idx]?._untranslated) lazyTranslate(idx)
     }
@@ -1165,6 +1202,33 @@ export default function App() {
     setChatMessages([])
     setChatInput('')
     setHoveredIdx(null)
+  }
+
+  // ─── Draggable pinned tooltip ─────────────────────────────────────────────
+  const handleTooltipDragStart = (e) => {
+    e.preventDefault()
+    const el = e.currentTarget.closest('[data-tooltip-pinned]')
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    tooltipDragRef.current = { offsetX: e.clientX - rect.left, offsetY: e.clientY - rect.top }
+    const onMove = (ev) => {
+      if (!tooltipDragRef.current) return
+      const x = ev.clientX - tooltipDragRef.current.offsetX
+      const y = ev.clientY - tooltipDragRef.current.offsetY
+      setPinnedTooltipPos({ x, y })
+    }
+    const onUp = () => {
+      tooltipDragRef.current = null
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      // Save position
+      setPinnedTooltipPos(prev => {
+        if (prev) localStorage.setItem('screenlens-tooltip-pos', JSON.stringify(prev))
+        return prev
+      })
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
   }
 
   // ─── Explain Word (short, auto-triggered on pin) ───────────────────────────
@@ -3192,15 +3256,30 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
         const hoverTransform = tooltipPos.anchor === 'below'
           ? 'translate(-50%, 0)' // tooltip below word
           : 'translate(-50%, -100%)' // tooltip above word (default)
-        const tooltipStyle = isPinned
-          ? { ...S.tooltip, ...S.tooltipExpanded, ...(hasExpanded ? { maxWidth: 900, width: '92vw' } : { maxWidth: 400, width: 'auto' }) }
-          : { ...S.tooltip, left: tooltipPos.x, top: tooltipPos.y, transform: hoverTransform }
+        const pinnedStyle = isPinned && pinnedTooltipPos
+          ? { ...S.tooltip, ...S.tooltipExpanded,
+              left: pinnedTooltipPos.x, top: pinnedTooltipPos.y, transform: 'none',
+              ...(hasExpanded ? { maxWidth: 900, width: 500 } : { maxWidth: 400, width: 'auto', minWidth: 300 }),
+            }
+          : isPinned
+            ? { ...S.tooltip, ...S.tooltipExpanded, ...(hasExpanded ? { maxWidth: 900, width: '92vw' } : { maxWidth: 400, width: 'auto' }) }
+            : null
+        const tooltipStyle = pinnedStyle || { ...S.tooltip, left: tooltipPos.x, top: tooltipPos.y, transform: hoverTransform }
         return (
         <>
-        {isPinned && (
+        {isPinned && !isOverlay && (
           <div style={S.tooltipBackdrop} onClick={dismissPin} />
         )}
-        <div style={tooltipStyle} onClick={(e) => e.stopPropagation()}>
+        <div data-tooltip-pinned={isPinned || undefined} style={tooltipStyle} onClick={(e) => e.stopPropagation()}>
+          {/* Drag handle for pinned tooltip */}
+          {isPinned && (
+            <div
+              onMouseDown={handleTooltipDragStart}
+              style={{ cursor: 'grab', padding: '2px 0 4px', display: 'flex', justifyContent: 'center', userSelect: 'none' }}
+            >
+              <div style={{ width: 32, height: 4, borderRadius: 2, background: '#3a4050' }} />
+            </div>
+          )}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div>
               <div style={S.ttWord}>{activeWord.text}</div>

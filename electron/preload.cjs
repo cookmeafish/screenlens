@@ -6,4 +6,5 @@ contextBridge.exposeInMainWorld('overlayAPI', {
   dismiss: () => ipcRenderer.send('overlay-dismiss'),
   setIgnoreMouse: (ignore) => ipcRenderer.send('set-ignore-mouse', ignore),
   captureScreenshot: () => ipcRenderer.invoke('capture-screenshot'),
+  resizeWindow: (bounds) => ipcRenderer.send('resize-overlay', bounds),
 })

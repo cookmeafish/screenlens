@@ -208,6 +208,13 @@ ipcMain.on('overlay-dismiss', () => {
   hideOverlay()
 })
 
+ipcMain.on('resize-overlay', (_, bounds) => {
+  if (overlayWindow) {
+    overlayWindow.setBounds(bounds)
+    overlayWindow.setAlwaysOnTop(true, 'screen-saver')
+  }
+})
+
 // React requests a screenshot capture (for area-select: capture after drawing)
 ipcMain.handle('capture-screenshot', async () => {
   try {
