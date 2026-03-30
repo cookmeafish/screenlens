@@ -2175,7 +2175,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
       onDrop={handleDrop}
       style={isOverlay ? {
         ...S.app, height: '100vh', overflow: 'hidden',
-        background: ((selectionMode || selectionViewport || areaSelectBounds) && activeMode.areaSelectTransparent !== false) ? 'transparent' : S.app.background,
+        background: ((selectionMode || selectionViewport || (areaSelectBounds && pinnedIdx !== null)) && activeMode.areaSelectTransparent !== false) ? 'transparent' : S.app.background,
       } : S.app}
     >
       <input
@@ -3161,14 +3161,17 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
             ) : (
             <div
               style={isOverlay
-                ? areaSelectBounds
+                ? (areaSelectBounds && pinnedIdx !== null)
                   ? { position: 'fixed', overflow: 'hidden',
                       left: areaSelectBounds.x, top: areaSelectBounds.y,
                       width: areaSelectBounds.width, height: areaSelectBounds.height,
                       background: '#000', borderRadius: 4,
                       border: '2px solid rgba(88,166,255,0.4)',
                       boxShadow: '0 4px 24px rgba(0,0,0,0.5)' }
-                  : { position: 'relative', overflow: 'hidden', width: '100vw', height: '100vh', background: '#000' }
+                  : areaSelectBounds
+                    ? { position: 'relative', overflow: 'hidden', width: '100%', height: '100%', background: '#000',
+                        borderRadius: 4, border: '2px solid rgba(88,166,255,0.4)' }
+                    : { position: 'relative', overflow: 'hidden', width: '100vw', height: '100vh', background: '#000' }
                 : S.imageContainer}
               onClick={() => !isOverlay && stage === 'done' && ocrWords.length > 0 && setExpanded(true)}
             >
