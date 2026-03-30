@@ -63,6 +63,13 @@ export default function App() {
   // ─── State ───────────────────────────────────────────────────────────────────
   const isOverlay = new URLSearchParams(window.location.search).has('overlay')
 
+  // Make body transparent for overlay mode so clip-path/transparent bg works
+  useEffect(() => {
+    if (!isOverlay) return
+    document.documentElement.style.background = 'transparent'
+    document.body.style.background = 'transparent'
+  }, [isOverlay])
+
   // ESC hides overlay — Electron handles the actual window hiding via global shortcut
   // This just resets the web app state so it's ready for the next capture
   useEffect(() => {
@@ -108,6 +115,12 @@ export default function App() {
   const [language, setLanguage] = useState('auto')
   const [targetLang, setTargetLang] = useState('eng')
   const [overlayRunning, setOverlayRunning] = useState(false)
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [selRect, setSelRect] = useState(null) // { x1, y1, x2, y2 } in viewport coords
+  const [selectionOffset, setSelectionOffset] = useState(null) // { x, y } in full-image pixels
+  const [selectionViewport, setSelectionViewport] = useState(null) // { x, y, w, h } in viewport px
+  const [selectionCrop, setSelectionCrop] = useState(null) // { dataUrl, w, h } for transparent mode
+  const selStartRef = useRef(null)
   const [ankiConnected, setAnkiConnected] = useState(null)
   const [ankiDecks, setAnkiDecks] = useState([])
   const [ankiCard, setAnkiCard] = useState(null)
@@ -115,6 +128,11 @@ export default function App() {
   const [ankiSyncing, setAnkiSyncing] = useState(false)
   const [ankiError, setAnkiError] = useState(null)
   const [ankiGenerating, setAnkiGenerating] = useState(false)
+  const [ankiEditing, setAnkiEditing] = useState(false)
+  const [ankiEditFront, setAnkiEditFront] = useState('')
+  const [ankiEditBack, setAnkiEditBack] = useState('')
+  const [ankiRefineInput, setAnkiRefineInput] = useState('')
+  const [ankiRefining, setAnkiRefining] = useState(false)
   const [showAnkiSettings, setShowAnkiSettings] = useState(false)
   const defaultStudyRules = {
     questionsPerCard: 3,
@@ -133,7 +151,7 @@ export default function App() {
     ratingRules: 'All correct = Easy, 1 wrong = AI judges Good or Hard based on answer quality, 2 wrong = Hard, All wrong = Again',
   }
   const defaultMode = {
-    id: 1, name: 'Language Learning', type: 'language', description: '', ankiDeck: '',
+    id: 1, name: 'Language Learning', type: 'language', description: '', ankiDeck: '', translateMode: 'all', areaSelectTransparent: true,
     fields: { pronunciation: true, translation: true, synonyms: true, definition: true, example: true },
     frontTemplate: '{word} ({partOfSpeech})',
     backTemplate: 'Pronunciación: {pronunciation}\nTraducción: {translation}\nSinónimos: {synonyms}\nDefinición: {definition}\nEjemplo: {example}',
@@ -179,6 +197,8 @@ export default function App() {
   const [deckBrowserEditing, setDeckBrowserEditing] = useState(null) // noteId being edited
   const [deckBrowserEditFields, setDeckBrowserEditFields] = useState({})
   const [deckBrowserSearch, setDeckBrowserSearch] = useState('')
+  const [deckBrowserRefineInput, setDeckBrowserRefineInput] = useState('')
+  const [deckBrowserRefining, setDeckBrowserRefining] = useState(false)
 
   const activeMode = modes.find((m) => m.id === activeModeId) || modes[0] || defaultMode
   const ankiFormat = activeMode
@@ -250,18 +270,14 @@ export default function App() {
     checkOverlay()
     const overlayPoll = setInterval(checkOverlay, 3000)
 
-    // Overlay mode: listen for screenshot capture events from Electron
-    const handleOverlayCapture = async () => {
+    // Overlay mode: load screenshot from Electron capture
+    const loadOverlayScreenshot = (onLoaded) => {
       const url = window.__overlayScreenshot
       if (!url) return
-      console.log('[Overlay] Loading screenshot from:', url)
-      try {
-        const resp = await fetch(url)
-        const blob = await resp.blob()
+      fetch(url).then(r => r.blob()).then(blob => {
         const reader = new FileReader()
         reader.onload = (e) => {
           const dataUrl = e.target.result
-          // Load image and auto-start analysis
           const img = new Image()
           img.onload = () => {
             setImgDims({ w: img.naturalWidth, h: img.naturalHeight })
@@ -269,17 +285,100 @@ export default function App() {
             setStage('captured')
             setOcrWords([])
             setError(null)
-            // Auto-analyze after state update
-            setTimeout(() => window.__autoAnalyze = dataUrl, 100)
+            // Reveal page now that new screenshot is rendered
+            document.body.style.opacity = '1'
+            onLoaded(dataUrl)
           }
           img.src = dataUrl
         }
         reader.readAsDataURL(blob)
-      } catch (err) {
-        console.error('[Overlay] Failed to load screenshot:', err)
-      }
+      }).catch(err => console.error('[Overlay] Failed to load screenshot:', err))
+    }
+
+    // Full-screen capture (Ctrl+Shift+S)
+    const handleOverlayCapture = () => {
+      console.log('[Overlay] Full capture')
+      window.__selectionMode = false
+      setSelectionMode(false)
+      setSelectionOffset(null)
+      setSelectionViewport(null)
+      setSelectionCrop(null)
+      loadOverlayScreenshot((dataUrl) => {
+        setTimeout(() => { window.__autoAnalyze = dataUrl }, 100)
+      })
     }
     window.addEventListener('overlay-capture', handleOverlayCapture)
+
+    // Area-select: selector window already captured, we receive the rect + screenshot
+    const handleAreaCaptured = async () => {
+      const rect = window.__areaSelectRect
+      const url = window.__overlayScreenshot
+      if (!rect || !url) return
+      window.__areaSelectRect = null
+      console.log('[Overlay] Area captured:', rect)
+
+      try {
+        const resp = await fetch(url)
+        const blob = await resp.blob()
+        const dataUrl = await new Promise((resolve) => {
+          const reader = new FileReader()
+          reader.onload = (e) => resolve(e.target.result)
+          reader.readAsDataURL(blob)
+        })
+        const img = await new Promise((resolve) => {
+          const i = new window.Image()
+          i.onload = () => resolve(i)
+          i.src = dataUrl
+        })
+
+        // Use screen dimensions (not window.innerWidth which is now the small window)
+        const scaleX = img.naturalWidth / rect.screenW
+        const scaleY = img.naturalHeight / rect.screenH
+        const cx = Math.round(rect.x * scaleX)
+        const cy = Math.round(rect.y * scaleY)
+        const cw = Math.round(rect.w * scaleX)
+        const ch = Math.round(rect.h * scaleY)
+
+        const canvas = document.createElement('canvas')
+        canvas.width = cw
+        canvas.height = ch
+        canvas.getContext('2d').drawImage(img, cx, cy, cw, ch, 0, 0, cw, ch)
+        const croppedDataUrl = canvas.toDataURL('image/png')
+
+        const pad = rect.pad || 6
+        // Window is sized to selection — render crop at (0,0) with padding
+        setImgDims({ w: cw, h: ch })
+        setScreenshot(croppedDataUrl)
+        setSelectionOffset(null) // no offset needed — crop IS the image
+        setSelectionViewport(null) // no viewport positioning — window IS the selection
+        setSelectionCrop(null) // not using the separate crop rendering path
+        setStage('captured')
+        setOcrWords([])
+        setError(null)
+        setSelectionMode(false)
+        window.__selectionMode = false
+        document.body.style.opacity = '1'
+        setTimeout(() => { window.__autoAnalyze = croppedDataUrl }, 100)
+      } catch (err) {
+        console.error('[Overlay] Area capture failed:', err)
+        document.body.style.opacity = '1'
+      }
+    }
+    window.addEventListener('overlay-area-captured', handleAreaCaptured)
+
+    // Overlay reset: clear old screenshot before new capture to prevent flash
+    const handleOverlayReset = () => {
+      setScreenshot(null)
+      setStage('idle')
+      setOcrWords([])
+      window.__selectionMode = false
+      setSelectionMode(false)
+      setSelRect(null)
+      setSelectionOffset(null)
+      setSelectionViewport(null)
+      setSelectionCrop(null)
+    }
+    window.addEventListener('overlay-reset', handleOverlayReset)
 
     // Check AnkiConnect on mount
     console.log('[Anki] checking connection on mount...')
@@ -386,6 +485,101 @@ export default function App() {
       }
     }
   }, [loadImageFromDataUrl])
+
+  // ─── Area Selection (Ctrl+Shift+A) ──────────────────────────────────────────
+  const selRectRef = useRef(null)
+  const screenshotRef = useRef(screenshot)
+  screenshotRef.current = screenshot
+
+  const handleSelectionDown = useCallback((e) => {
+    e.preventDefault()
+    const rect = { x1: e.clientX, y1: e.clientY, x2: e.clientX, y2: e.clientY }
+    selStartRef.current = { x: e.clientX, y: e.clientY }
+    selRectRef.current = rect
+    setSelRect(rect)
+  }, [])
+
+  const handleSelectionMove = useCallback((e) => {
+    if (!selStartRef.current) return
+    e.preventDefault()
+    const updated = { ...selRectRef.current, x2: e.clientX, y2: e.clientY }
+    selRectRef.current = updated
+    setSelRect(updated)
+  }, [])
+
+  const handleSelectionUp = useCallback(async () => {
+    if (!selStartRef.current) return
+    selStartRef.current = null
+    const r = selRectRef.current
+    if (!r) return
+    const x = Math.min(r.x1, r.x2)
+    const y = Math.min(r.y1, r.y2)
+    const w = Math.abs(r.x2 - r.x1)
+    const h = Math.abs(r.y2 - r.y1)
+    if (w < 10 || h < 10) return // too small, ignore
+
+    // Hide drawing UI immediately
+    window.__selectionMode = false
+    setSelectionMode(false)
+    setSelRect(null)
+    selRectRef.current = null
+
+    // Hide overlay so we capture the actual screen, not the overlay
+    document.body.style.opacity = '0'
+    await new Promise(resolve => setTimeout(resolve, 50))
+
+    // Capture screenshot now via Electron IPC (or via fetch for non-Electron)
+    let screenshotUrl
+    if (window.overlayAPI?.captureScreenshot) {
+      screenshotUrl = await window.overlayAPI.captureScreenshot()
+    }
+    if (!screenshotUrl) { document.body.style.opacity = '1'; return }
+
+    // Load the full screenshot, crop to selection, show only the crop
+    try {
+      const resp = await fetch(screenshotUrl)
+      const blob = await resp.blob()
+      const dataUrl = await new Promise((resolve) => {
+        const reader = new FileReader()
+        reader.onload = (e) => resolve(e.target.result)
+        reader.readAsDataURL(blob)
+      })
+      const img = await new Promise((resolve) => {
+        const i = new window.Image()
+        i.onload = () => resolve(i)
+        i.src = dataUrl
+      })
+
+      const scaleX = img.naturalWidth / window.innerWidth
+      const scaleY = img.naturalHeight / window.innerHeight
+      const cx = Math.round(x * scaleX)
+      const cy = Math.round(y * scaleY)
+      const cw = Math.round(w * scaleX)
+      const ch = Math.round(h * scaleY)
+
+      const canvas = document.createElement('canvas')
+      canvas.width = cw
+      canvas.height = ch
+      canvas.getContext('2d').drawImage(img, cx, cy, cw, ch, 0, 0, cw, ch)
+      const croppedDataUrl = canvas.toDataURL('image/png')
+
+      // Store full screenshot for non-transparent mode fallback
+      setImgDims({ w: img.naturalWidth, h: img.naturalHeight })
+      setScreenshot(dataUrl)
+      setSelectionOffset({ x: cx, y: cy })
+      setSelectionViewport({ x, y, w, h })
+      setSelectionCrop({ dataUrl: croppedDataUrl, w: cw, h: ch })
+      setStage('captured')
+      setOcrWords([])
+      setError(null)
+      document.body.style.opacity = '1'
+      // Auto-analyze the cropped region
+      setTimeout(() => { window.__autoAnalyze = croppedDataUrl }, 100)
+    } catch (err) {
+      console.error('[Overlay] Area-select capture failed:', err)
+      document.body.style.opacity = '1'
+    }
+  }, [])
 
   // ─── Analysis Pipeline ──────────────────────────────────────────────────────
   const analyzeImage = useCallback(async (dataUrl) => {
@@ -582,6 +776,21 @@ export default function App() {
 
       // ── Stage 2: AI Translation ────────────────────────────────────────────
       if (cancelRef.current) return
+
+      // In "click" mode, skip batch translation — words get translated on click
+      if (activeMode.translateMode === 'click') {
+        const mapped = finalWords.map((w, idx) => ({
+          ...w, _untranslated: true, translation: '', synonyms: [], category: 'foreign',
+          partOfSpeech: '', pronunciation: '', isEnglish: false, _globalIdx: idx,
+        }))
+        setOcrWords(mapped)
+        setStage('done')
+        setLoading(false)
+        ocrLog(`Click-to-translate mode: ${mapped.length} words ready, skipping batch translation`)
+        ocrLogFlush()
+        return
+      }
+
       setStage('translating')
       setProgress(`Found ${finalWords.length} words. Translating…`)
 
@@ -835,7 +1044,7 @@ export default function App() {
   useEffect(() => {
     if (!isOverlay) return
     const interval = setInterval(() => {
-      if (window.__autoAnalyze && stage === 'captured') {
+      if (window.__autoAnalyze && stage === 'captured' && !window.__selectionMode) {
         const dataUrl = window.__autoAnalyze
         window.__autoAnalyze = null
         analyzeImage(dataUrl)
@@ -905,18 +1114,18 @@ export default function App() {
     if (pinnedIdx !== null) return // don't override pinned tooltip
     setHoveredIdx(idx)
     const rect = e.currentTarget.getBoundingClientRect()
-    // Smart positioning: avoid going off screen
-    const vw = window.innerWidth, vh = window.innerHeight
+    const vw = window.innerWidth
+    const ttHalf = 160 // ~half of tooltip maxWidth (300/2 + margin)
     let x = rect.left + rect.width / 2
     let y = rect.top - 6
-    let anchor = 'above' // default: tooltip above word
-    // If word is near top, show tooltip below
-    if (rect.top < 150) {
+    let anchor = 'above'
+    // If not enough room above the word, show below
+    if (rect.top < 180) {
       y = rect.bottom + 6
       anchor = 'below'
     }
-    // Clamp horizontal to keep tooltip on screen
-    x = Math.max(160, Math.min(vw - 160, x))
+    // Clamp horizontal so tooltip doesn't clip left/right edges
+    x = Math.max(ttHalf, Math.min(vw - ttHalf, x))
     setTooltipPos({ x, y, anchor })
     if (ocrWords[idx]?._untranslated) lazyTranslate(idx)
   }
@@ -937,11 +1146,13 @@ export default function App() {
       setExplanation(null)
       setDeepExplanation(null)
       setWordStudy(null); setConjugation(null)
-      setAnkiCard(null); setAnkiError(null)
+      setAnkiCard(null); setAnkiError(null); setAnkiEditing(false); setAnkiRefineInput('')
       setChatMessages([])
       setChatInput('')
       const rect = e.currentTarget.getBoundingClientRect()
       setTooltipPos({ x: rect.left + rect.width / 2, y: rect.top - 6 })
+      // Lazy translate if in click mode and word hasn't been translated yet
+      if (ocrWords[idx]?._untranslated) lazyTranslate(idx)
     }
   }
 
@@ -950,7 +1161,7 @@ export default function App() {
     setExplanation(null)
     setDeepExplanation(null)
     setWordStudy(null); setConjugation(null)
-    setAnkiCard(null); setAnkiError(null)
+    setAnkiCard(null); setAnkiError(null); setAnkiEditing(false); setAnkiRefineInput('')
     setChatMessages([])
     setChatInput('')
     setHoveredIdx(null)
@@ -1007,6 +1218,15 @@ In 1-2 short sentences: explain "${word.text}" in the context of ${activeMode.na
     setAnkiGenerating(true)
     setAnkiError(null)
     setAnkiCard(null)
+    setAnkiEditing(false)
+    setAnkiRefineInput('')
+    // Re-check Anki connection so the status is fresh (user may have opened Anki since last check)
+    const connected = await ankiPing()
+    setAnkiConnected(connected)
+    if (connected) {
+      const decks = await ankiGetDecks().catch(() => [])
+      setAnkiDecks(decks)
+    }
     const srcLang = LANGS.find((l) => l.code === language)?.label || 'the source language'
     const tgtLang = LANGS.find((l) => l.code === targetLang)?.label || 'English'
     const context = ocrWords.map((w) => w.text).join(' ')
@@ -1083,6 +1303,42 @@ Output ONLY raw JSON. No markdown, no backticks.`
       setAnkiError('Card generation failed: ' + err.message)
     } finally {
       setAnkiGenerating(false)
+    }
+  }
+
+  const refineAnkiCard = async () => {
+    const instruction = ankiRefineInput.trim()
+    if (!instruction || !ankiCard || !apiKey || ankiRefining) return
+    setAnkiRefining(true)
+    setAnkiError(null)
+    try {
+      const prompt = `Here is an Anki flashcard:
+
+FRONT:
+${ankiCard.front}
+
+BACK:
+${ankiCard.back}
+
+TAGS: ${(ankiCard.tags || []).join(', ')}
+
+The user wants this change: "${instruction}"
+
+Return a JSON object with the updated card: { "front": "...", "back": "...", "tags": [...] }
+Keep any fields the user didn't ask to change. Output ONLY raw JSON, no markdown or backticks.`
+
+      const text = await providerConfig.call(apiKey, 'You edit Anki flashcard content. Always respond with valid JSON only.', prompt)
+      const updated = JSON.parse(text.trim().replace(/^```json?\s*/i, '').replace(/```\s*$/, ''))
+      setAnkiCard({
+        front: updated.front || ankiCard.front,
+        back: updated.back || ankiCard.back,
+        tags: Array.isArray(updated.tags) ? updated.tags : ankiCard.tags,
+      })
+      setAnkiRefineInput('')
+    } catch (err) {
+      setAnkiError('Refine failed: ' + err.message)
+    } finally {
+      setAnkiRefining(false)
     }
   }
 
@@ -1178,6 +1434,7 @@ Output ONLY raw JSON. No markdown, no backticks.`
     })
     setDeckBrowserEditing(note.noteId)
     setDeckBrowserEditFields(fields)
+    setDeckBrowserRefineInput('')
   }
 
   const saveEditNote = async (noteId) => {
@@ -1195,6 +1452,27 @@ Output ONLY raw JSON. No markdown, no backticks.`
       console.log('[Deck] note updated:', noteId)
     } catch (err) {
       console.error('[Deck] update failed:', err.message)
+    }
+  }
+
+  const refineDeckBrowserCard = async () => {
+    const instruction = deckBrowserRefineInput.trim()
+    if (!instruction || !apiKey || deckBrowserRefining || !deckBrowserEditing) return
+    setDeckBrowserRefining(true)
+    try {
+      const fieldsDesc = Object.entries(deckBrowserEditFields).map(([name, val]) => `${name}:\n${val}`).join('\n\n')
+      const prompt = `Here is an Anki flashcard:\n\n${fieldsDesc}\n\nThe user wants this change: "${instruction}"\n\nReturn a JSON object with the updated fields: { ${Object.keys(deckBrowserEditFields).map(k => `"${k}": "..."`).join(', ')} }\nKeep any fields the user didn't ask to change. Output ONLY raw JSON, no markdown or backticks.`
+
+      const text = await providerConfig.call(apiKey, 'You edit Anki flashcard content. Always respond with valid JSON only.', prompt)
+      const updated = JSON.parse(text.trim().replace(/^```json?\s*/i, '').replace(/```\s*$/, ''))
+      const newFields = { ...deckBrowserEditFields }
+      Object.entries(updated).forEach(([k, v]) => { if (k in newFields) newFields[k] = String(v) })
+      setDeckBrowserEditFields(newFields)
+      setDeckBrowserRefineInput('')
+    } catch (err) {
+      console.error('[Deck] refine failed:', err.message)
+    } finally {
+      setDeckBrowserRefining(false)
     }
   }
 
@@ -1756,17 +2034,21 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
   }
 
   // ─── Word Overlay Renderer ─────────────────────────────────────────────────
-  const renderWordOverlays = () => {
+  const renderWordOverlays = (cropMode) => {
     if (!imgDims.w || !imgDims.h) return null
 
-    // Use raw Tesseract bboxes — no artificial inflation
-    // Just clamp same-row overlaps so adjacent words don't bleed
+    // In crop mode (transparent area-select), bboxes are relative to the crop — no offset needed
+    // Otherwise, offset bboxes to full-image coordinates
+    const off = cropMode ? { x: 0, y: 0 } : (selectionOffset || { x: 0, y: 0 })
+    // In crop mode, use the crop's pixel dimensions for percentage calculation
+    const refW = cropMode && selectionCrop ? selectionCrop.w : imgDims.w
+    const refH = cropMode && selectionCrop ? selectionCrop.h : imgDims.h
+
     const boxes = ocrWords.map((word) => {
       const { x0, y0, x1, y1 } = word.bbox
-      // Tighten vertically: reduce top/bottom padding (Tesseract includes line spacing)
       const h = y1 - y0
       const vPad = Math.round(h * 0.1)
-      return { x0, y0: y0 + vPad, x1, y1: y1 - vPad }
+      return { x0: x0 + off.x, y0: y0 + vPad + off.y, x1: x1 + off.x, y1: y1 - vPad + off.y }
     })
 
     // Clamp same-row overlaps
@@ -1782,10 +2064,10 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
 
     return ocrWords.map((word, i) => {
       const box = boxes[i]
-      const x = (box.x0 / imgDims.w) * 100
-      const y = (box.y0 / imgDims.h) * 100
-      const w = Math.max(0, ((box.x1 - box.x0) / imgDims.w) * 100)
-      const h = Math.max(0, ((box.y1 - box.y0) / imgDims.h) * 100)
+      const x = (box.x0 / refW) * 100
+      const y = (box.y0 / refH) * 100
+      const w = Math.max(0, ((box.x1 - box.x0) / refW) * 100)
+      const h = Math.max(0, ((box.y1 - box.y0) / refH) * 100)
       const isActive = hoveredIdx === i || pinnedIdx === i
       const isPinned = pinnedIdx === i
 
@@ -1838,7 +2120,10 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      style={isOverlay ? { ...S.app, height: '100vh', overflow: 'hidden' } : S.app}
+      style={isOverlay ? {
+        ...S.app, height: '100vh', overflow: 'hidden',
+        background: ((selectionMode || selectionViewport) && activeMode.areaSelectTransparent !== false) ? 'transparent' : S.app.background,
+      } : S.app}
     >
       <input
         ref={fileInputRef}
@@ -2268,6 +2553,25 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
             </div>
           )}
 
+          {/* Overlay Settings */}
+          <div style={{
+            padding: '8px 12px', borderRadius: 6,
+            background: 'rgba(210,168,255,.06)', border: '1px solid rgba(210,168,255,.25)',
+          }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#d2a8ff', marginBottom: 6 }}>Overlay Settings</div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#c9d1d9', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={activeMode.areaSelectTransparent !== false}
+                onChange={() => updateActiveMode({ areaSelectTransparent: !(activeMode.areaSelectTransparent !== false) })}
+              />
+              Transparent background on area select (Ctrl+Shift+A)
+            </label>
+            <div style={{ fontSize: 10, color: '#7d8590', marginTop: 3 }}>
+              When enabled, only the selected area stays frozen — the rest of the screen shows through live.
+            </div>
+          </div>
+
           {/* Knowledge Base — top-level collapsible */}
           <button
             onClick={() => { const opening = !showKnowledgeSection; setShowKnowledgeSection(opening); if (opening) loadKnowledgeFiles() }}
@@ -2398,9 +2702,26 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                                 />
                               </div>
                             ))}
+                            <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                              <input
+                                type="text"
+                                value={deckBrowserRefineInput}
+                                onChange={(e) => setDeckBrowserRefineInput(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') refineDeckBrowserCard() }}
+                                placeholder='e.g. "Say football instead of soccer"'
+                                style={{ flex: 1, background: '#161b22', color: '#e6edf3', border: '1px solid #2a3040', borderRadius: 4, padding: '5px 8px', fontSize: 11, fontFamily: 'inherit', outline: 'none' }}
+                              />
+                              <button
+                                onClick={refineDeckBrowserCard}
+                                disabled={deckBrowserRefining || !deckBrowserRefineInput.trim()}
+                                style={{ background: 'rgba(136,98,255,.15)', color: '#a78bfa', border: '1px solid rgba(136,98,255,.3)', borderRadius: 4, padding: '5px 10px', fontSize: 10, cursor: 'pointer', fontFamily: 'inherit', opacity: (deckBrowserRefining || !deckBrowserRefineInput.trim()) ? 0.4 : 1 }}
+                              >
+                                {deckBrowserRefining ? 'Refining...' : 'Refine with AI'}
+                              </button>
+                            </div>
                             <div style={{ display: 'flex', gap: 6 }}>
                               <button onClick={() => saveEditNote(note.noteId)} style={{ ...S.captureBtn, borderRadius: 5, fontSize: 11, padding: '5px 12px' }}>Save</button>
-                              <button onClick={() => setDeckBrowserEditing(null)} style={{ ...S.ghostBtn, fontSize: 11 }}>Cancel</button>
+                              <button onClick={() => { setDeckBrowserEditing(null); setDeckBrowserRefineInput('') }} style={{ ...S.ghostBtn, fontSize: 11 }}>Cancel</button>
                             </div>
                           </div>
                         ) : (
@@ -2665,7 +2986,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
       )}
 
       {/* ── Main Content ─────────────────────────────────────────────────────── */}
-      {!studyActive && !deckBrowserActive && <main style={isOverlay ? { ...S.main, padding: 0 } : S.main}>
+      {!studyActive && !deckBrowserActive && <main style={isOverlay ? { ...S.main, padding: 0, background: 'transparent' } : S.main}>
         {/* Empty state (hidden in overlay) */}
         {stage === 'idle' && !isOverlay && (
           <div style={S.emptyState}>
@@ -2764,6 +3085,27 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
             )}
 
             {/* Image container */}
+            {isOverlay && selectionViewport && selectionCrop && activeMode.areaSelectTransparent !== false ? (
+              /* Transparent area-select mode: only show the cropped selection, rest is transparent */
+              <div style={{
+                position: 'fixed',
+                left: selectionViewport.x, top: selectionViewport.y,
+                width: selectionViewport.w, height: selectionViewport.h,
+                borderRadius: 4, overflow: 'hidden',
+                border: '2px solid rgba(88,166,255,0.4)',
+                boxShadow: '0 4px 24px rgba(0,0,0,0.5)',
+              }}>
+                <img src={selectionCrop.dataUrl} alt="Selection" style={{
+                  display: 'block', width: '100%', height: '100%', objectFit: 'fill',
+                }} />
+                {/* Word overlays positioned within the crop */}
+                {stage === 'done' && ocrWords.length > 0 && (
+                  <div style={{ position: 'absolute', inset: 0 }}>
+                    {renderWordOverlays(true)}
+                  </div>
+                )}
+              </div>
+            ) : (
             <div
               style={isOverlay
                 ? { position: 'relative', overflow: 'hidden', width: '100vw', height: '100vh', background: '#000' }
@@ -2796,9 +3138,11 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                 </div>
               )}
 
-              {/* Expand hint (hidden in overlay) */}
+            </div>
+            )}
+              {/* Expand hint (below image, hidden in overlay) */}
               {stage === 'done' && ocrWords.length > 0 && !isOverlay && (
-                <div style={S.hint}>
+                <div style={{ color: '#7d8590', fontSize: 11, display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'center', marginTop: 6 }}>
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
                     <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"
                       stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
@@ -2806,7 +3150,6 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                   Click to expand & hover words
                 </div>
               )}
-            </div>
 
             {/* Stats bar */}
             {stage === 'done' && !isOverlay && (
@@ -2984,10 +3327,43 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
               {/* Anki card preview */}
               {ankiCard && !ankiSynced[activeIdx] && (
                 <div style={S.ttAnkiCard}>
-                  <div style={S.ttAnkiCardLabel}>Front</div>
-                  <div style={S.ttAnkiCardContent}>{ankiCard.front}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <div style={S.ttAnkiCardLabel}>Front</div>
+                    <button
+                      onClick={() => {
+                        if (ankiEditing) {
+                          setAnkiCard({ ...ankiCard, front: ankiEditFront, back: ankiEditBack })
+                          setAnkiEditing(false)
+                        } else {
+                          setAnkiEditFront(ankiCard.front)
+                          setAnkiEditBack(ankiCard.back)
+                          setAnkiEditing(true)
+                        }
+                      }}
+                      style={{ background: 'none', border: '1px solid #2a3040', color: ankiEditing ? '#7ee787' : '#7d8590', borderRadius: 4, padding: '2px 8px', fontSize: 10, cursor: 'pointer', fontFamily: 'inherit' }}
+                    >
+                      {ankiEditing ? 'Save' : 'Edit'}
+                    </button>
+                  </div>
+                  {ankiEditing ? (
+                    <textarea
+                      value={ankiEditFront}
+                      onChange={(e) => setAnkiEditFront(e.target.value)}
+                      style={{ ...S.ttAnkiCardContent, width: '100%', minHeight: 36, resize: 'vertical', background: '#161b22', color: '#e6edf3', border: '1px solid #2a3040', borderRadius: 4, padding: '6px 8px', fontSize: 12, fontFamily: 'inherit', boxSizing: 'border-box' }}
+                    />
+                  ) : (
+                    <div style={S.ttAnkiCardContent}>{ankiCard.front}</div>
+                  )}
                   <div style={S.ttAnkiCardLabel}>Back</div>
-                  <div style={{ ...S.ttAnkiCardContent, whiteSpace: 'pre-line', marginBottom: 4 }}>{ankiCard.back}</div>
+                  {ankiEditing ? (
+                    <textarea
+                      value={ankiEditBack}
+                      onChange={(e) => setAnkiEditBack(e.target.value)}
+                      style={{ ...S.ttAnkiCardContent, width: '100%', minHeight: 80, resize: 'vertical', background: '#161b22', color: '#e6edf3', border: '1px solid #2a3040', borderRadius: 4, padding: '6px 8px', fontSize: 12, fontFamily: 'inherit', whiteSpace: 'pre-line', boxSizing: 'border-box' }}
+                    />
+                  ) : (
+                    <div style={{ ...S.ttAnkiCardContent, whiteSpace: 'pre-line', marginBottom: 4 }}>{ankiCard.back}</div>
+                  )}
                   {ankiCard.tags?.length > 0 && (
                     <div style={{ marginBottom: 6 }}>
                       <div style={S.ttAnkiCardLabel}>Tags</div>
@@ -2998,6 +3374,26 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                       </div>
                     </div>
                   )}
+                  {/* AI refine input */}
+                  <div style={{ marginBottom: 6 }}>
+                    <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                      <input
+                        type="text"
+                        value={ankiRefineInput}
+                        onChange={(e) => setAnkiRefineInput(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') refineAnkiCard() }}
+                        placeholder='e.g. "Say football instead of soccer"'
+                        style={{ flex: 1, background: '#161b22', color: '#e6edf3', border: '1px solid #2a3040', borderRadius: 4, padding: '4px 8px', fontSize: 11, fontFamily: 'inherit', outline: 'none' }}
+                      />
+                      <button
+                        onClick={refineAnkiCard}
+                        disabled={ankiRefining || !ankiRefineInput.trim()}
+                        style={{ background: 'rgba(136,98,255,.15)', color: '#a78bfa', border: '1px solid rgba(136,98,255,.3)', borderRadius: 4, padding: '4px 10px', fontSize: 10, cursor: 'pointer', fontFamily: 'inherit', opacity: (ankiRefining || !ankiRefineInput.trim()) ? 0.4 : 1 }}
+                      >
+                        {ankiRefining ? 'Refining...' : 'Refine'}
+                      </button>
+                    </div>
+                  </div>
                   <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
                     <span>Deck:</span>
                     {ankiDecks.length > 0 ? (
