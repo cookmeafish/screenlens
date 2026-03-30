@@ -124,6 +124,7 @@ export default function App() {
   const [selectionOffset, setSelectionOffset] = useState(null) // { x, y } in full-image pixels
   const [selectionViewport, setSelectionViewport] = useState(null) // { x, y, w, h } in viewport px
   const [selectionCrop, setSelectionCrop] = useState(null) // { dataUrl, w, h } for transparent mode
+  const [areaSelectBounds, setAreaSelectBounds] = useState(null) // original small window bounds to restore on dismiss
   const selStartRef = useRef(null)
   const [ankiConnected, setAnkiConnected] = useState(null)
   const [ankiDecks, setAnkiDecks] = useState([])
@@ -361,6 +362,8 @@ export default function App() {
         setError(null)
         setSelectionMode(false)
         window.__selectionMode = false
+        // Save the small window bounds so we can restore after tooltip dismiss
+        setAreaSelectBounds({ x: window.screenX, y: window.screenY, width: window.innerWidth, height: window.innerHeight })
         document.body.style.opacity = '1'
         setTimeout(() => { window.__autoAnalyze = croppedDataUrl }, 100)
       } catch (err) {
@@ -381,6 +384,7 @@ export default function App() {
       setSelectionOffset(null)
       setSelectionViewport(null)
       setSelectionCrop(null)
+      setAreaSelectBounds(null)
     }
     window.addEventListener('overlay-reset', handleOverlayReset)
 
@@ -1155,36 +1159,17 @@ export default function App() {
       setChatInput('')
       const rect = e.currentTarget.getBoundingClientRect()
       setTooltipPos({ x: rect.left + rect.width / 2, y: rect.top - 6 })
-      // In overlay with small window (area-select), expand window to show tooltip
-      if (isOverlay && window.innerWidth < screen.width * 0.8 && window.overlayAPI?.resizeWindow) {
-        const screenW = screen.width, screenH = screen.height
-        // Expand to cover enough space for the tooltip
-        const curX = window.screenX, curY = window.screenY
-        const curW = window.innerWidth, curH = window.innerHeight
-        const tooltipW = 420, tooltipH = 500
-        // Position tooltip to the right of the selection, or left if no room
-        let ttX, ttY
-        if (curX + curW + tooltipW + 20 < screenW) {
-          ttX = curW + 10
-          ttY = 10
-        } else if (curX - tooltipW - 20 > 0) {
-          ttX = -tooltipW - 10
-          ttY = 10
-        } else {
-          ttX = 10
-          ttY = curH + 10
+      // In area-select overlay (small window), expand to full screen so tooltip has room
+      if (isOverlay && areaSelectBounds && window.overlayAPI?.resizeWindow) {
+        window.overlayAPI.resizeWindow({ x: 0, y: 0, width: screen.width, height: screen.height })
+        // Default tooltip position: to the right of the selection area, or use saved pos
+        if (!pinnedTooltipPos) {
+          const selRight = areaSelectBounds.x + areaSelectBounds.width
+          setPinnedTooltipPos({
+            x: selRight + 20 < screen.width - 400 ? selRight + 20 : Math.max(10, areaSelectBounds.x - 420),
+            y: areaSelectBounds.y,
+          })
         }
-        // Compute new window bounds to contain both selection and tooltip
-        const newX = Math.max(0, Math.min(curX, curX + ttX))
-        const newY = Math.max(0, Math.min(curY, curY + ttY))
-        const newRight = Math.min(screenW, Math.max(curX + curW, curX + ttX + tooltipW))
-        const newBottom = Math.min(screenH, Math.max(curY + curH, curY + ttY + tooltipH))
-        window.overlayAPI.resizeWindow({ x: newX, y: newY, width: newRight - newX, height: newBottom - newY })
-        // Set tooltip position relative to new window origin
-        const savedPos = pinnedTooltipPos
-        const relTtX = (curX - newX) + (ttX > 0 ? curW + 10 : ttX < 0 ? -tooltipW + curW : 10)
-        const relTtY = (curY - newY) + (ttY > curH ? curH + 10 : 10)
-        setPinnedTooltipPos(savedPos || { x: Math.max(10, relTtX), y: Math.max(10, relTtY) })
       } else if (!pinnedTooltipPos) {
         setPinnedTooltipPos({ x: Math.max(10, rect.left - 100), y: Math.max(10, rect.bottom + 10) })
       }
@@ -1202,6 +1187,10 @@ export default function App() {
     setChatMessages([])
     setChatInput('')
     setHoveredIdx(null)
+    // In area-select overlay, shrink window back to selection bounds
+    if (isOverlay && areaSelectBounds && window.overlayAPI?.resizeWindow) {
+      window.overlayAPI.resizeWindow(areaSelectBounds)
+    }
   }
 
   // ─── Draggable pinned tooltip ─────────────────────────────────────────────
@@ -2186,7 +2175,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
       onDrop={handleDrop}
       style={isOverlay ? {
         ...S.app, height: '100vh', overflow: 'hidden',
-        background: ((selectionMode || selectionViewport) && activeMode.areaSelectTransparent !== false) ? 'transparent' : S.app.background,
+        background: ((selectionMode || selectionViewport || areaSelectBounds) && activeMode.areaSelectTransparent !== false) ? 'transparent' : S.app.background,
       } : S.app}
     >
       <input
@@ -3172,12 +3161,19 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
             ) : (
             <div
               style={isOverlay
-                ? { position: 'relative', overflow: 'hidden', width: '100vw', height: '100vh', background: '#000' }
+                ? areaSelectBounds
+                  ? { position: 'fixed', overflow: 'hidden',
+                      left: areaSelectBounds.x, top: areaSelectBounds.y,
+                      width: areaSelectBounds.width, height: areaSelectBounds.height,
+                      background: '#000', borderRadius: 4,
+                      border: '2px solid rgba(88,166,255,0.4)',
+                      boxShadow: '0 4px 24px rgba(0,0,0,0.5)' }
+                  : { position: 'relative', overflow: 'hidden', width: '100vw', height: '100vh', background: '#000' }
                 : S.imageContainer}
               onClick={() => !isOverlay && stage === 'done' && ocrWords.length > 0 && setExpanded(true)}
             >
               <img src={screenshot} alt="Screenshot" style={isOverlay
-                ? { display: 'block', width: '100vw', height: '100vh', objectFit: 'fill' }
+                ? { display: 'block', width: '100%', height: '100%', objectFit: 'fill' }
                 : S.mainImage} />
 
               {/* Word overlays */}
