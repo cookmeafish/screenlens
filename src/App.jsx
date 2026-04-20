@@ -206,6 +206,7 @@ export default function App() {
   const [deckBrowserSearch, setDeckBrowserSearch] = useState('')
   const [deckBrowserRefineInput, setDeckBrowserRefineInput] = useState('')
   const [deckBrowserRefining, setDeckBrowserRefining] = useState(false)
+  const [deckBrowserSaveStatus, setDeckBrowserSaveStatus] = useState(null) // null | 'saving' | 'saved' | 'error'
   const [studyWrappingUp, setStudyWrappingUp] = useState(false)
   const [studyDeleteConfirm, setStudyDeleteConfirm] = useState(null) // cardIdx being confirmed for deletion
   const [studyFeedbackChat, setStudyFeedbackChat] = useState({}) // { [cardIdx]: { messages, input, loading } }
@@ -1550,14 +1551,18 @@ Keep any fields the user didn't ask to change. Output ONLY raw JSON, no markdown
     Object.entries(deckBrowserEditFields).forEach(([name, val]) => {
       htmlFields[name] = val.replace(/\n/g, '<br>')
     })
+    setDeckBrowserSaveStatus('saving')
     try {
       await ankiUpdateNote(noteId, htmlFields)
       ankiSync().catch(() => {})
       // Reload
       await loadDeckNotes(deckBrowserDeck)
       setDeckBrowserEditing(null)
+      setDeckBrowserSaveStatus('saved')
+      setTimeout(() => setDeckBrowserSaveStatus(null), 2000)
       console.log('[Deck] note updated:', noteId)
     } catch (err) {
+      setDeckBrowserSaveStatus('error')
       console.error('[Deck] update failed:', err.message)
     }
   }
@@ -1595,6 +1600,21 @@ Keep any fields the user didn't ask to change. Output ONLY raw JSON, no markdown
   }
 
   const closeDeckBrowser = () => {
+    // Sync any edited notes back into the active study session
+    if (deckBrowserNotes.length > 0 && studyAllCards.length > 0) {
+      const noteMap = {}
+      deckBrowserNotes.forEach(n => { noteMap[n.noteId] = n })
+      const updatedAllCards = studyAllCards.map(card => {
+        const updatedNote = noteMap[card.note]
+        return updatedNote ? { ...card, fields: updatedNote.fields } : card
+      })
+      setStudyAllCards(updatedAllCards)
+      setStudyCardState(prev => prev.map(cs => {
+        const card = updatedAllCards.find(c => c.cardId === cs.cardId)
+        if (!card || !noteMap[card.note]) return cs
+        return { ...cs, front: getCardFront(card), back: getCardBack(card) }
+      }))
+    }
     setDeckBrowserActive(false)
     setDeckBrowserNotes([])
     setDeckBrowserEditing(null)
@@ -2127,12 +2147,18 @@ Back: "${cs.back}"
 Their results:
 ${resultsContext}
 
-The student may:
-1. Report a typo (e.g. "claor was a typo, I meant claro") — if their intended answer would be correct, include <action>{"type":"fix_typo","questionIndex":N,"correctedAnswer":"...","shouldBeCorrect":true}</action> in your response.
-2. Flag an out-of-scope question — if the question was genuinely unfair or ambiguous, include <action>{"type":"bad_question","questionIndex":N,"reason":"..."}</action> and suggest how to clarify the card.
-3. Ask to update the Anki card for clarity — if the card itself is ambiguous, include <action>{"type":"update_card","newFront":"...","newBack":"..."}</action> with improved content.
+IMPORTANT: Always trust the student. Be supportive, never argumentative.
 
-Respond naturally in 1-3 sentences, then include action tags if applicable. You can include multiple actions.`
+The student may:
+1. Report a typo or correction (e.g. "I meant guadaña", "that was a typo") — ALWAYS trust them. If their intended answer demonstrates they knew the concept on the card, mark ALL questions correct using mark_all_correct. Do not demand full explanations or argue.
+2. Explicitly ask to mark things correct (e.g. "mark all as correct", "just do it", "i knew it", "count it") — ALWAYS honor this with mark_all_correct, no resistance.
+3. Flag an out-of-scope question — if genuinely unfair, include <action>{"type":"bad_question","questionIndex":N,"reason":"..."}</action>
+4. Ask to update the Anki card — include <action>{"type":"update_card","newFront":"...","newBack":"..."}</action>
+
+To mark ALL questions correct: <action>{"type":"mark_all_correct","reason":"brief reason"}</action>
+To mark ONE question correct: <action>{"type":"fix_typo","questionIndex":N,"correctedAnswer":"...","shouldBeCorrect":true}</action>
+
+Respond in 1-2 sentences max. Always include the action tag when applicable. Never refuse a student's correction request.`
       const fullPrompt = newMessages.map(m => `${m.role === 'user' ? 'User' : 'Tutor'}: ${m.text}`).join('\n')
       const text = await providerConfig.call(apiKey, systemPrompt, fullPrompt)
 
@@ -2144,7 +2170,11 @@ Respond naturally in 1-3 sentences, then include action tags if applicable. You 
       for (const match of actionMatches) {
         try {
           const action = JSON.parse(match[1])
-          if (action.type === 'fix_typo' && action.shouldBeCorrect) {
+          if (action.type === 'mark_all_correct') {
+            if (!updatedStates) updatedStates = [...studyCardState]
+            updatedStates[cardIdx] = { ...updatedStates[cardIdx] }
+            updatedStates[cardIdx].results = updatedStates[cardIdx].results.map(r => ({ ...r, correct: true, feedback: 'Marked correct.' }))
+          } else if (action.type === 'fix_typo' && action.shouldBeCorrect) {
             // Re-evaluate: mark the question as correct
             if (!updatedStates) updatedStates = [...studyCardState]
             const qi = action.questionIndex
@@ -2185,6 +2215,7 @@ Respond naturally in 1-3 sentences, then include action tags if applicable. You 
           setStudyStats(prev => ({ ...prev, [oldRating]: Math.max(0, prev[oldRating] - 1), [label]: prev[label] + 1 }))
         }
         updatedStates[cardIdx].rating = label
+        updatedStates[cardIdx].synced = false
         setStudyCardState(updatedStates)
       }
 
@@ -3343,9 +3374,11 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                                 {deckBrowserRefining ? 'Refining...' : 'Refine with AI'}
                               </button>
                             </div>
-                            <div style={{ display: 'flex', gap: 6 }}>
-                              <button onClick={() => saveEditNote(note.noteId)} style={{ ...S.captureBtn, borderRadius: 5, fontSize: 11, padding: '5px 12px' }}>Save</button>
-                              <button onClick={() => { setDeckBrowserEditing(null); setDeckBrowserRefineInput('') }} style={{ ...S.ghostBtn, fontSize: 11 }}>Cancel</button>
+                            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                              <button onClick={() => saveEditNote(note.noteId)} disabled={deckBrowserSaveStatus === 'saving'} style={{ ...S.captureBtn, borderRadius: 5, fontSize: 11, padding: '5px 12px', opacity: deckBrowserSaveStatus === 'saving' ? 0.6 : 1 }}>{deckBrowserSaveStatus === 'saving' ? 'Saving...' : 'Save'}</button>
+                              <button onClick={() => { setDeckBrowserEditing(null); setDeckBrowserRefineInput(''); setDeckBrowserSaveStatus(null) }} style={{ ...S.ghostBtn, fontSize: 11 }}>Cancel</button>
+                              {deckBrowserSaveStatus === 'error' && <span style={{ fontSize: 10, color: '#f85149' }}>Save failed — is Anki open?</span>}
+                              {deckBrowserSaveStatus === 'saved' && <span style={{ fontSize: 10, color: '#7ee787' }}>Saved</span>}
                             </div>
                           </div>
                         ) : (
