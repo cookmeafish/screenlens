@@ -5,7 +5,7 @@ A multi-tab learning app with AI chat, Anki-integrated study sessions, screen tr
 ## Features
 
 ### Tabs
-- **Chat** — AI conversational assistant for learning, with inline Anki card generation, deck attachment for personalized tutoring, and conversation history
+- **Chat** — AI conversational assistant for learning, with inline Anki card generation, deck attachment for personalized tutoring, web search, and persistent conversation history
 - **Study** — Anki study sessions with AI-generated questions, deck browser, typo correction, feedback chat, "I know this" card deletion, wrap up/end now controls, and spaced repetition insights
 - **Picture** — Screen capture/OCR/translation with pixel-accurate word overlays, overlay mode for games
 - **Stats** — Study streaks, accuracy trends, per-deck breakdown (coming soon)
@@ -22,7 +22,8 @@ A multi-tab learning app with AI chat, Anki-integrated study sessions, screen tr
 - Full AI chatbot for explaining concepts and answering questions
 - Ask the AI to create Anki flashcards inline — cards appear with preview, edit, and sync controls
 - Attach an Anki deck for personalized tutoring — AI reads all cards + progress observations to focus on weak areas
-- Conversation history saved to localStorage with session management sidebar
+- **Web search** — toggle the globe button to search the internet before AI responds, with source citations
+- Conversation history persisted to disk (`chats/` directory) with session management sidebar
 - AI can auto-update progress observations when it discovers new struggles or improvements
 
 ### Study Tab
@@ -62,6 +63,7 @@ screenlens/
   modes/
     Default/           ← Default mode template (committed to git)
     <your modes>/      ← Your custom modes (gitignored)
+  chats/               ← Persistent chat sessions (gitignored)
   decks/               ← Per-deck progress tracking (auto-created)
     <deck-name>/
       progress-observations.md  ← AI-maintained struggle/improvement log
@@ -248,12 +250,14 @@ npm install electron --save-optional
 
 ## AI Help Assistant
 
-A floating **?** button in the bottom-left corner provides an AI-powered help chat that knows the app inside and out.
+A floating **?** button provides a context-aware AI assistant that knows the app and your current state.
 
-- Click the **?** button to open the help chat
-- Ask anything: "What does the overlay button do?", "How do I create flashcards?", "Can I use this with a game?"
-- Follow-up questions supported — it's a full conversation
-- Drag the button anywhere on screen to reposition it
+- Click the **?** button to open the help chat, drag it anywhere on screen
+- **Context-aware** — sees your current tab, active mode, OCR words, selected word details, study session, and recent chat messages
+- **Dock to side panel** — click the dock icon to pin the help chat as a right-side panel; pop out to return to floating mode
+- **Persistent history** — help chat sessions are saved to disk and appear in the Chat tab sidebar (marked with a blue ?)
+- **New chat** — click + to start a fresh help conversation; old ones remain accessible in the Chat tab
+- Ask anything: "What does this word mean?", "Help me with this study question", "How do I use the overlay?"
 - Uses your configured AI provider and API key
 - Hidden in overlay mode to avoid interfering with gameplay
 
@@ -269,9 +273,10 @@ A floating **?** button in the bottom-left corner provides an AI-powered help ch
 
 ```
 src/
-  App.jsx              ← Main application component (~2800 lines)
+  App.jsx              ← Main application component
   components/
     FormattedText.jsx   ← Rich text formatting for AI explanations
+    HelpChat.jsx        ← Context-aware floating/docked help assistant
   config/
     languages.js       ← 18 supported languages
     prompts.js         ← Translation prompt + POS/category color maps
@@ -288,5 +293,5 @@ modes/
   Default/             ← Default Language Learning config template (committed)
     config.json
   <user modes>/        ← Custom modes with per-mode configs + knowledge (gitignored)
-vite.config.js         ← Vite dev server + API endpoints (keys, config, modes, knowledge, anki proxy, overlay)
+vite.config.js         ← Vite dev server + API endpoints (keys, config, modes, knowledge, anki proxy, overlay, chats, web search)
 ```
