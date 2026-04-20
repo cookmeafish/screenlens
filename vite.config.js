@@ -488,6 +488,143 @@ function apiPlugin() {
           res.end('')
         }
       })
+      // Deck progress observations
+      server.middlewares.use('/api/deck-progress', (req, res) => {
+        if (req.method === 'GET') {
+          const url = new URL(req.url, 'http://localhost')
+          const deck = url.searchParams.get('deck')
+          if (!deck) { res.statusCode = 400; res.end(JSON.stringify({ error: 'deck required' })); return }
+          const file = path.resolve('decks', deck, 'progress-observations.md')
+          res.setHeader('Content-Type', 'application/json')
+          if (fs.existsSync(file)) {
+            res.end(JSON.stringify({ content: fs.readFileSync(file, 'utf8') }))
+          } else {
+            res.end(JSON.stringify({ content: '' }))
+          }
+        } else if (req.method === 'POST') {
+          let body = ''
+          req.on('data', c => body += c)
+          req.on('end', () => {
+            try {
+              const { deck, content } = JSON.parse(body)
+              const dir = path.resolve('decks', deck)
+              if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+              fs.writeFileSync(path.resolve(dir, 'progress-observations.md'), content, 'utf8')
+              console.log('[Deck Progress] saved for:', deck)
+              res.setHeader('Content-Type', 'application/json')
+              res.end(JSON.stringify({ ok: true }))
+            } catch (e) {
+              res.statusCode = 400
+              res.end(JSON.stringify({ error: e.message }))
+            }
+          })
+        } else { res.statusCode = 405; res.end('') }
+      })
+
+      // Chat sessions — saved to chats/ folder
+      server.middlewares.use('/api/chats', (req, res) => {
+        const chatsDir = path.resolve('chats')
+        if (!fs.existsSync(chatsDir)) fs.mkdirSync(chatsDir, { recursive: true })
+
+        if (req.method === 'GET') {
+          // List all chat sessions
+          try {
+            const files = fs.readdirSync(chatsDir).filter(f => f.endsWith('.json')).sort((a, b) => {
+              return fs.statSync(path.join(chatsDir, b)).mtimeMs - fs.statSync(path.join(chatsDir, a)).mtimeMs
+            })
+            const sessions = files.map(f => {
+              try {
+                const data = JSON.parse(fs.readFileSync(path.join(chatsDir, f), 'utf8'))
+                return { id: f.replace('.json', ''), ...data, messages: undefined, messageCount: data.messages?.length || 0 }
+              } catch { return null }
+            }).filter(Boolean)
+            res.setHeader('Content-Type', 'application/json')
+            res.end(JSON.stringify(sessions))
+          } catch (e) {
+            res.statusCode = 500
+            res.end(JSON.stringify({ error: e.message }))
+          }
+        } else if (req.method === 'POST') {
+          // Save or update a chat session
+          let body = ''
+          req.on('data', c => body += c)
+          req.on('end', () => {
+            try {
+              const { id, title, messages, type } = JSON.parse(body)
+              const chatId = id || Date.now().toString()
+              const file = path.join(chatsDir, `${chatId}.json`)
+              fs.writeFileSync(file, JSON.stringify({ title, messages, date: new Date().toISOString(), ...(type ? { type } : {}) }, null, 2), 'utf8')
+              console.log('[Chat] saved:', chatId, '-', title)
+              res.setHeader('Content-Type', 'application/json')
+              res.end(JSON.stringify({ id: chatId, ok: true }))
+            } catch (e) {
+              res.statusCode = 400
+              res.end(JSON.stringify({ error: e.message }))
+            }
+          })
+        } else if (req.method === 'DELETE') {
+          const url = new URL(req.url, 'http://localhost')
+          const id = url.searchParams.get('id')
+          if (!id) { res.statusCode = 400; res.end(JSON.stringify({ error: 'id required' })); return }
+          const file = path.join(chatsDir, `${id}.json`)
+          if (fs.existsSync(file)) fs.unlinkSync(file)
+          res.setHeader('Content-Type', 'application/json')
+          res.end(JSON.stringify({ ok: true }))
+        } else { res.statusCode = 405; res.end('') }
+      })
+
+      // Load a single chat session
+      server.middlewares.use('/api/chat-load', (req, res) => {
+        const url = new URL(req.url, 'http://localhost')
+        const id = url.searchParams.get('id')
+        if (!id) { res.statusCode = 400; res.end(JSON.stringify({ error: 'id required' })); return }
+        const file = path.resolve('chats', `${id}.json`)
+        res.setHeader('Content-Type', 'application/json')
+        if (fs.existsSync(file)) {
+          res.end(fs.readFileSync(file, 'utf8'))
+        } else {
+          res.statusCode = 404
+          res.end(JSON.stringify({ error: 'not found' }))
+        }
+      })
+
+      // Web search proxy — uses DuckDuckGo HTML lite
+      server.middlewares.use('/api/web-search', async (req, res) => {
+        const url = new URL(req.url, 'http://localhost')
+        const query = url.searchParams.get('q')
+        if (!query) { res.statusCode = 400; res.end(JSON.stringify({ error: 'q required' })); return }
+        res.setHeader('Content-Type', 'application/json')
+        try {
+          const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`
+          const resp = await fetch(ddgUrl, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+          })
+          const html = await resp.text()
+          // Parse results from DuckDuckGo HTML
+          const results = []
+          const resultBlocks = html.split('result__body"')
+          for (let i = 1; i < resultBlocks.length && results.length < 5; i++) {
+            const block = resultBlocks[i]
+            const titleMatch = block.match(/class="result__a"[^>]*>(.*?)<\/a>/s)
+            const snippetMatch = block.match(/class="result__snippet"[^>]*>(.*?)<\/a>/s) || block.match(/class="result__snippet"[^>]*>(.*?)<\/td>/s)
+            const urlMatch = block.match(/class="result__url"[^>]*>(.*?)<\/a>/s)
+            if (titleMatch) {
+              results.push({
+                title: titleMatch[1].replace(/<[^>]+>/g, '').trim(),
+                snippet: snippetMatch ? snippetMatch[1].replace(/<[^>]+>/g, '').trim() : '',
+                url: urlMatch ? urlMatch[1].replace(/<[^>]+>/g, '').trim() : '',
+              })
+            }
+          }
+          console.log('[Web Search]', query, '-', results.length, 'results')
+          res.end(JSON.stringify({ results }))
+        } catch (e) {
+          console.error('[Web Search] error:', e.message)
+          res.statusCode = 500
+          res.end(JSON.stringify({ error: e.message, results: [] }))
+        }
+      })
+
     },
   }
 }
@@ -497,6 +634,6 @@ export default defineConfig({
   server: {
     port: 3000,
     open: true,
-    watch: { ignored: ['**/.env', '**/config.json', '**/ankiformat.json', '**/modes/**'] },
+    watch: { ignored: ['**/.env', '**/config.json', '**/ankiformat.json', '**/modes/**', '**/decks/**', '**/chats/**'] },
   },
 })

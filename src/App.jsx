@@ -83,6 +83,8 @@ export default function App() {
     window.addEventListener('keydown', handleEsc, true)
     return () => window.removeEventListener('keydown', handleEsc, true)
   }, [isOverlay])
+  const [activeTab, setActiveTab] = useState(null) // 'chat' | 'study' | 'picture' | 'stats' — null until config loads
+  const [chatSidePanel, setChatSidePanel] = useState(false) // split-screen chat alongside another tab
   const [provider, setProvider] = useState('anthropic')
   const [configLoaded, setConfigLoaded] = useState(false)
   const [apiKeys, setApiKeys] = useState({})
@@ -204,6 +206,31 @@ export default function App() {
   const [deckBrowserSearch, setDeckBrowserSearch] = useState('')
   const [deckBrowserRefineInput, setDeckBrowserRefineInput] = useState('')
   const [deckBrowserRefining, setDeckBrowserRefining] = useState(false)
+  const [studyWrappingUp, setStudyWrappingUp] = useState(false)
+  const [studyDeleteConfirm, setStudyDeleteConfirm] = useState(null) // cardIdx being confirmed for deletion
+  const [studyFeedbackChat, setStudyFeedbackChat] = useState({}) // { [cardIdx]: { messages, input, loading } }
+  const [studyInsights, setStudyInsights] = useState(null)
+  const [studyInsightsLoading, setStudyInsightsLoading] = useState(false)
+  const [studySyncNotification, setStudySyncNotification] = useState(false)
+
+  // ─── Chat Tab State ───────────────────────────────────────────────────────
+  const [chatTabMsgs, setChatTabMsgs] = useState([]) // [{ role, content, cards? }]
+  const [chatTabInput, setChatTabInput] = useState('')
+  const [chatTabLoading, setChatTabLoading] = useState(false)
+  const [chatTabAttachedDeck, setChatTabAttachedDeck] = useState(null) // { name, cards, progress }
+  const [chatTabAttachLoading, setChatTabAttachLoading] = useState(false)
+  const [chatTabSessions, setChatTabSessions] = useState([])
+  const [chatTabSessionId, setChatTabSessionId] = useState(null)
+  const [chatTabEditingTitle, setChatTabEditingTitle] = useState(null)
+  const [chatTabWebSearch, setChatTabWebSearch] = useState(false)
+  const chatTabScrollRef = useRef(null)
+
+  // Load chat sessions from disk on mount
+  useEffect(() => {
+    fetch('/api/chats').then(r => r.json()).then(sessions => {
+      setChatTabSessions(sessions)
+    }).catch(() => {})
+  }, [])
 
   const activeMode = modes.find((m) => m.id === activeModeId) || modes[0] || defaultMode
   const ankiFormat = activeMode
@@ -266,6 +293,7 @@ export default function App() {
       if (config.language) setLanguage(config.language)
       if (config.targetLang) setTargetLang(config.targetLang)
       if (config.showHighlights !== undefined) setShowHighlights(config.showHighlights)
+      setActiveTab(config.activeTab || 'picture')
       // ankiDeck is now per-mode (stored in mode config)
       setKeysLoaded(true)
       setConfigLoaded(true)
@@ -426,9 +454,9 @@ export default function App() {
     fetch('/api/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider, language, targetLang, showHighlights }),
+      body: JSON.stringify({ provider, language, targetLang, showHighlights, ...(activeTab ? { activeTab } : {}) }),
     }).catch(() => {})
-  }, [provider, language, targetLang, showHighlights, configLoaded])
+  }, [provider, language, targetLang, showHighlights, activeTab, configLoaded])
 
   const setCurrentKey = (key) => {
     setApiKeys((prev) => ({ ...prev, [provider]: key }))
@@ -1047,6 +1075,31 @@ export default function App() {
     window.addEventListener('paste', handler)
     return () => window.removeEventListener('paste', handler)
   }, [loadImageFromFile])
+
+  // ─── Save study stats to history when session reaches summary ────────────
+  useEffect(() => {
+    if (studyPhase !== 'summary' || !studyDeck) return
+    const totalCards = studyStats.easy + studyStats.good + studyStats.hard + studyStats.again
+    if (totalCards === 0) return
+    const totalQuestions = studyCardState.reduce((s, cs) => s + (cs.results?.length || 0), 0)
+    const correctQuestions = studyCardState.reduce((s, cs) => s + (cs.results?.filter(r => r.correct).length || 0), 0)
+    const entry = {
+      date: new Date().toISOString().split('T')[0],
+      deck: studyDeck,
+      mode: activeMode.name,
+      cardsStudied: totalCards,
+      accuracy: totalQuestions > 0 ? Math.round(correctQuestions / totalQuestions * 100) : 0,
+      correct: correctQuestions,
+      totalQuestions,
+      ratings: { ...studyStats },
+    }
+    try {
+      const history = JSON.parse(localStorage.getItem('screenlens-study-history') || '[]')
+      history.unshift(entry)
+      localStorage.setItem('screenlens-study-history', JSON.stringify(history.slice(0, 500)))
+      console.log('[Stats] saved session:', entry)
+    } catch {}
+  }, [studyPhase, studyStats, studyCardState, studyDeck])
 
   // ─── Overlay auto-analyze ────────────────────────────────────────────────
   useEffect(() => {
@@ -1677,168 +1730,247 @@ Output ONLY raw JSON. No markdown, no backticks.`
       if (!cardIds || cardIds.length === 0) cardIds = await ankiFindCards(`deck:"${deck}"`)
       if (!cardIds || cardIds.length === 0) { setAnkiError('No cards found in this deck'); setStudyLoading(false); return }
 
-      // Load knowledge base
       const knowledgeRes = await fetch(`/api/modes/knowledge?mode=${encodeURIComponent(activeMode.name)}`).then(r => r.json()).catch(() => ({ content: null, fileCount: 0 }))
       setStudyKnowledge(knowledgeRes.content)
       setStudyKnowledgeCount(knowledgeRes.fileCount || 0)
-      console.log('[Study] knowledge base:', knowledgeRes.fileCount || 0, 'files')
 
-      // Fetch live deck stats
       const stats = await ankiGetDeckStats([deck]).catch(() => ({}))
       const deckStat = Object.values(stats)[0] || { new_count: 0, learn_count: 0, review_count: 0 }
       setStudyDeckStats(deckStat)
 
       const shuffled = [...cardIds].sort(() => Math.random() - 0.5)
-      const cards = await ankiCardsInfo(shuffled.slice(0, 50))
+      const cards = await ankiCardsInfo(shuffled.slice(0, 100))
       console.log('[Study] loaded', cards.length, 'cards from deck:', deck)
       setStudyAllCards(cards)
       setStudyBatchIdx(0)
       setStudyStats({ easy: 0, good: 0, hard: 0, again: 0 })
-      await startBatch(cards, 0)
+
+      // Load initial batch of 10 cards
+      const rules = activeMode.studyRules || (activeMode.type === 'language' ? defaultStudyRules : defaultGeneralStudyRules)
+      const cardsAtOnce = 10
+      const questionsPerCard = rules.questionsPerCard || 3
+      const questionPrompt = rules.questionPrompt || defaultStudyRules.questionPrompt
+      const studyLang = rules.studyLanguage || 'English'
+      const knowledgeContext = knowledgeRes.content ? `\n\nReference material:\n${knowledgeRes.content.substring(0, 4000)}\n\nUse this context to create more specific, contextual questions.` : ''
+
+      const initialCards = cards.slice(0, cardsAtOnce)
+      const cardStates = []
+      for (const card of initialCards) {
+        const front = getCardFront(card)
+        const back = getCardBack(card)
+        let questions = []
+        try {
+          const prompt = `Card front: "${front}"\nCard back: "${back}"\n\nGenerate exactly ${questionsPerCard} quiz questions for this flashcard.\n\nRULES:\n- DO NOT include the answer or the card front word in the question\n- DO NOT ask "what is the translation of X" where X is the answer — that's too obvious\n- Questions should test UNDERSTANDING, not just translation. Use scenarios, fill-in-the-blank with context, definitions, usage examples\n- Each question should approach the concept from a DIFFERENT angle\n- For language cards: test usage in sentences, synonyms/antonyms, grammatical properties — not just "translate this word"\n\n${questionPrompt}\n\nPrefer text-based answers. Only use multiple choice if genuinely helpful (e.g. choosing between similar concepts). If using multiple choice, format as: "Question?\\nA) option\\nB) option\\nC) option\\nD) option"\n\nGenerate all questions in ${studyLang}. The student will answer in ${studyLang}.${knowledgeContext}\n\nReturn a JSON array of ${questionsPerCard} question strings. Output ONLY raw JSON. No markdown, no backticks.`
+          const text = await providerConfig.call(apiKey, 'You generate flashcard quiz questions. Always respond with a valid JSON array of strings.', prompt)
+          questions = JSON.parse(text.trim().replace(/^```json?\s*/i, '').replace(/```\s*$/, ''))
+          if (!Array.isArray(questions)) questions = [`What concept is being tested here? Hint: ${back.slice(0, 20)}...`]
+        } catch {
+          questions = [`What concept relates to: ${back.slice(0, 30)}...?`, `Explain this in your own words.`, `Why is this important?`]
+        }
+        cardStates.push({ cardId: card.cardId, front, back, questions: questions.slice(0, questionsPerCard), answers: [], results: [], done: false, questionIdx: 0 })
+      }
+
+      console.log('[Study] started with', cardStates.length, 'active cards')
+      setStudyCardState(cardStates)
+      setStudyBatchIdx(cardsAtOnce) // next card to pull from pool
+      setStudyQueue([]) // not using pre-built queue anymore
+      setStudyQueueIdx(0)
+      setStudyInput('')
+      setStudyLoading(false)
+      setStudyPhase('question')
     } catch (err) {
       console.error('[Study] failed to start:', err.message)
       setAnkiError('Study failed: ' + err.message)
-    } finally {
       setStudyLoading(false)
     }
   }
 
-  const startBatch = async (allCards, batchStart) => {
-    const rules = activeMode.studyRules || (activeMode.type === 'language' ? defaultStudyRules : defaultGeneralStudyRules)
-    const cardsAtOnce = rules.cardsAtOnce || 3
-    const questionsPerCard = rules.questionsPerCard || 3
-    const questionPrompt = rules.questionPrompt || defaultStudyRules.questionPrompt
+  const lastAskedCardRef = useRef(null)
 
-    const batchCards = allCards.slice(batchStart, batchStart + cardsAtOnce)
-    if (batchCards.length === 0) { setStudyPhase('summary'); return }
-
-    setStudyLoading(true)
-
-    // Generate questions for all cards in batch
-    const cardStates = []
-    for (const card of batchCards) {
-      const front = getCardFront(card)
-      const back = getCardBack(card)
-      let questions = []
-      try {
-        const studyLang = rules.studyLanguage || 'English'
-        const knowledgeContext = studyKnowledge ? `\n\nReference material for this subject:\n${studyKnowledge.substring(0, 4000)}\n\nUse this context to create more specific questions when relevant.` : ''
-        const prompt = `Card front: "${front}"\nCard back: "${back}"\n\nGenerate exactly ${questionsPerCard} quiz questions for this flashcard.\n\n${questionPrompt}\n\nGenerate all questions in ${studyLang}. The student will answer in ${studyLang}.${knowledgeContext}\n\nReturn a JSON array of ${questionsPerCard} question strings. Output ONLY raw JSON. No markdown, no backticks.`
-        const text = await providerConfig.call(apiKey, 'You generate flashcard quiz questions. Always respond with a valid JSON array of strings.', prompt)
-        questions = JSON.parse(text.trim().replace(/^```json?\s*/i, '').replace(/```\s*$/, ''))
-        if (!Array.isArray(questions)) questions = [`What does "${front}" mean?`]
-      } catch {
-        questions = [`Define "${front}".`, `Explain "${front}" in your own words.`, `Why is "${front}" important?`]
-      }
-      cardStates.push({ cardId: card.cardId, front, back, questions: questions.slice(0, questionsPerCard), answers: [], results: [], done: false })
-    }
-
-    // Build interleaved queue — round-robin questions across cards
-    const queue = []
-    for (let q = 0; q < questionsPerCard; q++) {
-      const indices = [...Array(cardStates.length).keys()].sort(() => Math.random() - 0.5)
-      for (const ci of indices) {
-        if (q < cardStates[ci].questions.length) {
-          queue.push({ cardIdx: ci, questionIdx: q })
-        }
-      }
-    }
-
-    console.log('[Study] batch started:', cardStates.length, 'cards,', queue.length, 'questions interleaved')
-    setStudyCardState(cardStates)
-    setStudyQueue(queue)
-    setStudyQueueIdx(0)
-    setStudyInput('')
-    setStudyLoading(false)
-    setStudyPhase('question')
+  // Pick a random active (not done) card — avoid same card twice in a row
+  const getNextStudyQuestion = () => {
+    const activeCards = studyCardState.map((cs, i) => ({ cs, i })).filter(({ cs }) => !cs.done && cs.questionIdx < cs.questions.length)
+    if (activeCards.length === 0) return null
+    // Exclude last asked card unless it's the only one
+    let candidates = activeCards.filter(({ i }) => i !== lastAskedCardRef.current)
+    if (candidates.length === 0) candidates = activeCards
+    const pick = candidates[Math.floor(Math.random() * candidates.length)]
+    lastAskedCardRef.current = pick.i
+    return { cardIdx: pick.i, questionIdx: pick.cs.questionIdx }
   }
 
+  const [currentQuestion, setCurrentQuestion] = useState(null)
+
+  // Pick first question when entering question phase
+  useEffect(() => {
+    if (studyPhase === 'question' && !currentQuestion && studyCardState.length > 0) {
+      setCurrentQuestion(getNextStudyQuestion())
+    }
+  }, [studyPhase, studyCardState])
+
   const submitStudyAnswer = async () => {
-    if (!studyInput.trim() || studyLoading) return
+    if (!studyInput.trim() || studyLoading || !currentQuestion) return
     const answer = studyInput.trim()
-    const current = studyQueue[studyQueueIdx]
-    const cs = studyCardState[current.cardIdx]
-    const question = cs.questions[current.questionIdx]
+    const { cardIdx } = currentQuestion
 
-    setStudyLoading(true)
-    setStudyInput('')
+    // Record answer instantly — no AI call, no delay
+    const newStates = [...studyCardState]
+    newStates[cardIdx] = {
+      ...newStates[cardIdx],
+      answers: [...newStates[cardIdx].answers, answer],
+      questionIdx: newStates[cardIdx].questionIdx + 1,
+    }
 
+    const qpc = (activeMode.studyRules || defaultStudyRules).questionsPerCard || 3
+
+    // Check if this card has all questions answered
+    if (newStates[cardIdx].questionIdx >= qpc) {
+      // All questions answered for this card — NOW evaluate with AI
+      newStates[cardIdx].done = true
+      newStates[cardIdx].evaluating = true
+      setStudyCardState(newStates)
+      setStudyInput('')
+
+      // Pick next question from remaining active cards immediately (no wait)
+      const remaining = newStates.filter(cs => !cs.done && cs.questionIdx < cs.questions.length)
+      if (remaining.length > 0) {
+        const nextActive = remaining[Math.floor(Math.random() * remaining.length)]
+        setCurrentQuestion({ cardIdx: newStates.indexOf(nextActive), questionIdx: nextActive.questionIdx })
+      } else {
+        setCurrentQuestion(null)
+      }
+
+      // Evaluate all answers for this card in background
+      evaluateCardAnswers(cardIdx, newStates[cardIdx])
+
+      // Pull a new card from pool to replace the completed one
+      pullNewCard()
+    } else {
+      setStudyCardState(newStates)
+      setStudyInput('')
+      // Pick next question (could be same card or different — random)
+      const nextQ = (() => {
+        const active = newStates.filter(cs => !cs.done && cs.questionIdx < cs.questions.length)
+        if (active.length === 0) return null
+        const pick = active[Math.floor(Math.random() * active.length)]
+        return { cardIdx: newStates.indexOf(pick), questionIdx: pick.questionIdx }
+      })()
+      setCurrentQuestion(nextQ)
+    }
+  }
+
+  // Evaluate all answers for a completed card (runs in background, no blocking)
+  const evaluateCardAnswers = async (cardIdx, cs) => {
     try {
       const rules = activeMode.studyRules || defaultStudyRules
       const studyLang = rules.studyLanguage || 'English'
       const grammarOn = rules.grammarFeedback || false
-      const knowledgeContext = studyKnowledge ? `\n\nReference material:\n${studyKnowledge.substring(0, 2000)}` : ''
-      const grammarInstructions = grammarOn
-        ? `\n\nAlso evaluate grammar/spelling in ${studyLang}. Include:\n- "grammarNote": grammar/spelling correction if any issues, or null if perfect\n- "grammarRelevant": true ONLY if the grammar error directly relates to what the card is testing (e.g. wrong conjugation on a conjugation card), false for general typos`
-        : ''
-      const responseFormat = grammarOn
-        ? '{"correct": true/false, "feedback": "brief explanation", "grammarNote": "correction or null", "grammarRelevant": true/false}'
-        : '{"correct": true/false, "feedback": "brief explanation"}'
-      const prompt = `You are evaluating a student's answer to a flashcard question.\n\nCard front: "${cs.front}"\nCard back: "${cs.back}"\nQuestion: "${question}"\nStudent's answer: "${answer}"\n\nThe student is answering in ${studyLang}.\nEvaluate: is the answer factually/conceptually correct based on the card?${grammarInstructions}${knowledgeContext}\nRespond with JSON: ${responseFormat}`
+      const modeType = activeMode.type === 'language' ? `The student is learning a FOREIGN LANGUAGE (${activeMode.name}). Typos in ${studyLang} should be marked CORRECT if the concept is understood.` : `The student is studying ${activeMode.name}.`
+      const grammarExtra = grammarOn ? ' For each answer also include "grammarNote" (correction or null) and "grammarRelevant" (true only if grammar error relates to what the card tests).' : ''
+
+      const questionsAndAnswers = cs.questions.map((q, i) => `Q${i+1}: ${q}\nAnswer: ${cs.answers[i] || '(no answer)'}`).join('\n\n')
+      const prompt = `Evaluate ALL answers for this flashcard at once.\n\nCard front: "${cs.front}"\nCard back: "${cs.back}"\n\n${modeType}\n\n${questionsAndAnswers}\n\nFor each answer, determine if it's correct based on the card content.\nALWAYS note any grammar, spelling, or accent issues in the feedback (e.g. missing accent mark on brújula). These notes are educational, not penalizing.${grammarExtra}\n\nReturn a JSON array of ${cs.questions.length} objects: [{"correct": true/false, "feedback": "brief explanation including any grammar/accent notes"${grammarOn ? ', "grammarNote": "...", "grammarRelevant": true/false' : ''}}]\n\nOutput ONLY raw JSON. No markdown, no backticks.`
+
       const text = await providerConfig.call(apiKey, 'You evaluate flashcard answers. Always respond with valid JSON only.', prompt)
-      const result = JSON.parse(text.trim().replace(/^```json?\s*/i, '').replace(/```\s*$/, ''))
+      const results = JSON.parse(text.trim().replace(/^```json?\s*/i, '').replace(/```\s*$/, ''))
 
-      // Update card state
-      const newStates = [...studyCardState]
-      newStates[current.cardIdx] = {
-        ...newStates[current.cardIdx],
-        answers: [...newStates[current.cardIdx].answers, answer],
-        results: [...newStates[current.cardIdx].results, result],
-      }
+      if (!Array.isArray(results)) return
 
-      // Check if this card is done (all questions answered)
-      const qpc = (activeMode.studyRules || defaultStudyRules).questionsPerCard || 3
-      if (newStates[current.cardIdx].results.length >= qpc) {
-        newStates[current.cardIdx].done = true
-        // Rate this card
-        const wrongCount = newStates[current.cardIdx].results.filter((r) => !r.correct || r.grammarRelevant).length
-        let ease, label
-        if (wrongCount === 0) { ease = 4; label = 'easy' }
-        else if (wrongCount === 1) { ease = 3; label = 'good' }
-        else if (wrongCount >= qpc) { ease = 1; label = 'again' }
-        else { ease = 2; label = 'hard' }
-        newStates[current.cardIdx].rating = label
-        try {
-          await ankiAnswerCards([{ cardId: cs.cardId, ease }])
-          ankiSync().catch(() => {})
-        } catch (err) {
-          console.warn('[Study] failed to rate card (may be deleted):', err.message)
+      // Rate the card
+      const qpc = cs.questions.length
+      const wrongCount = results.filter(r => !r.correct || r.grammarRelevant).length
+      let ease, label
+      if (wrongCount === 0) { ease = 4; label = 'easy' }
+      else if (wrongCount === 1) { ease = 3; label = 'good' }
+      else if (wrongCount >= qpc) { ease = 1; label = 'again' }
+      else { ease = 2; label = 'hard' }
+
+      setStudyCardState(prev => {
+        const updated = [...prev]
+        updated[cardIdx] = { ...updated[cardIdx], results, rating: label, ease, evaluating: false }
+        return updated
+      })
+      setStudyStats(prev => ({ ...prev, [label]: prev[label] + 1 }))
+
+      // Check if all cards are done and evaluated
+      setStudyCardState(prev => {
+        const allDone = prev.every(cs => cs.done)
+        const allEvaluated = prev.every(cs => !cs.evaluating)
+        if (allDone && allEvaluated && !studyWrappingUp) {
+          // All cards done — if no more in pool, go to summary
+          if (studyBatchIdx >= studyAllCards.length) {
+            setTimeout(() => setStudyPhase('summary'), 100)
+          }
         }
-        // Refresh deck stats live
-        ankiGetDeckStats([studyDeck]).then((s) => {
+        return prev
+      })
+
+      console.log('[Study] card evaluated:', cs.front, '→', label)
+    } catch (err) {
+      console.error('[Study] evaluation failed:', err.message)
+      setStudyCardState(prev => {
+        const updated = [...prev]
+        updated[cardIdx] = { ...updated[cardIdx], evaluating: false, results: cs.questions.map(() => ({ correct: false, feedback: 'Evaluation failed' })), rating: 'again', ease: 1 }
+        return updated
+      })
+    }
+  }
+
+  // Pull a new card from the pool to replace a completed one
+  const pullNewCard = async () => {
+    if (studyWrappingUp || studyBatchIdx >= studyAllCards.length) return
+    const card = studyAllCards[studyBatchIdx]
+    if (!card) return
+    setStudyBatchIdx(prev => prev + 1)
+
+    const rules = activeMode.studyRules || defaultStudyRules
+    const questionsPerCard = rules.questionsPerCard || 3
+    const studyLang = rules.studyLanguage || 'English'
+    const questionPrompt = rules.questionPrompt || defaultStudyRules.questionPrompt
+    const front = getCardFront(card)
+    const back = getCardBack(card)
+
+    let questions = []
+    try {
+      const prompt = `Card front: "${front}"\nCard back: "${back}"\n\nGenerate exactly ${questionsPerCard} quiz questions.\n\nRULES:\n- DO NOT include the answer or card front word in the question\n- DO NOT ask obvious translation questions like "what means X"\n- Test UNDERSTANDING: scenarios, fill-in-the-blank, definitions, usage\n- Each question from a DIFFERENT angle\n\n${questionPrompt}\n\nPrefer text-based answers. Multiple choice only if genuinely helpful.\n\nGenerate in ${studyLang}.${studyKnowledge ? `\n\nReference material:\n${studyKnowledge.substring(0, 2000)}` : ''}\n\nReturn a JSON array of ${questionsPerCard} strings. Output ONLY raw JSON.`
+      const text = await providerConfig.call(apiKey, 'You generate flashcard quiz questions. Always respond with a valid JSON array of strings.', prompt)
+      questions = JSON.parse(text.trim().replace(/^```json?\s*/i, '').replace(/```\s*$/, ''))
+      if (!Array.isArray(questions)) questions = [`What concept relates to: ${back.slice(0, 30)}...?`]
+    } catch {
+      questions = [`What concept relates to: ${back.slice(0, 30)}...?`, `Explain in your own words.`, `Why is this important?`]
+    }
+
+    const newCardState = { cardId: card.cardId, front, back, questions: questions.slice(0, questionsPerCard), answers: [], results: [], done: false, questionIdx: 0 }
+    setStudyCardState(prev => [...prev, newCardState])
+    console.log('[Study] pulled new card:', front)
+  }
+
+  // startBatch is no longer used in the new system but keep for compatibility
+  const startBatch = async () => {}
+
+  // Sync all completed card ratings to Anki (called when going to summary or explicitly)
+  const syncRatingsToAnki = async () => {
+    const ratingsToSync = studyCardState.filter(cs => cs.done && cs.ease && cs.rating !== 'deleted' && !cs.synced)
+    if (ratingsToSync.length > 0) {
+      try {
+        await ankiAnswerCards(ratingsToSync.map(cs => ({ cardId: cs.cardId, ease: cs.ease })))
+        ankiSync().catch(() => {})
+        ankiGetDeckStats([studyDeck]).then(s => {
           const ds = Object.values(s)[0]
           if (ds) setStudyDeckStats(ds)
         }).catch(() => {})
-        setStudyStats((prev) => ({ ...prev, [label]: prev[label] + 1 }))
-        console.log('[Study] card done:', cs.front, '→', label)
+        // Mark as synced
+        setStudyCardState(prev => prev.map(cs => cs.done && cs.ease ? { ...cs, synced: true } : cs))
+        console.log('[Study] synced', ratingsToSync.length, 'card ratings to Anki')
+      } catch (err) {
+        console.warn('[Study] failed to sync ratings:', err.message)
       }
-      setStudyCardState(newStates)
-
-      // Advance queue
-      const nextQIdx = studyQueueIdx + 1
-      if (nextQIdx >= studyQueue.length) {
-        setStudyPhase('batchFeedback')
-      } else {
-        setStudyQueueIdx(nextQIdx)
-      }
-    } catch (err) {
-      console.error('[Study] evaluation failed:', err.message)
-    } finally {
-      setStudyLoading(false)
     }
   }
 
   const nextBatch = async () => {
-    const rules = activeMode.studyRules || defaultStudyRules
-    const cardsAtOnce = rules.cardsAtOnce || 3
-    const nextStart = studyBatchIdx + cardsAtOnce
-    if (nextStart >= studyAllCards.length) {
-      setStudyPhase('summary')
-    } else {
-      setStudyBatchIdx(nextStart)
-      setStudyLoading(true)
-      await startBatch(studyAllCards, nextStart)
-    }
+    await syncRatingsToAnki()
+    setStudyPhase('summary')
   }
 
   const exitStudy = () => {
@@ -1850,6 +1982,426 @@ Output ONLY raw JSON. No markdown, no backticks.`
     setStudyPhase('pick')
     setStudyInput('')
     setAnkiError(null)
+    setStudyWrappingUp(false)
+    setStudyDeleteConfirm(null)
+    setStudyFeedbackChat({})
+    setStudyInsights(null)
+    setCurrentQuestion(null)
+  }
+
+  // Generate spaced repetition insights + update progress observations
+  const generateStudyInsights = async () => {
+    if (!apiKey || studyInsightsLoading || studyCardState.length === 0) return
+    setStudyInsightsLoading(true)
+    try {
+      // Load existing progress observations
+      let existingProgress = ''
+      try {
+        const r = await fetch(`/api/deck-progress?deck=${encodeURIComponent(studyDeck)}`)
+        const d = await r.json()
+        existingProgress = d.content || ''
+      } catch {}
+
+      const sessionSummary = studyCardState.filter(cs => cs.done).map(cs => {
+        const wrongQs = cs.results.filter(r => !r.correct).map((r, i) => cs.questions[i]).join('; ')
+        return `Card: "${cs.front}" → Rating: ${cs.rating}${wrongQs ? ` (struggled with: ${wrongQs})` : ''}`
+      }).join('\n')
+
+      const prompt = `Analyze this study session and update the progress observations.
+
+Session results for deck "${studyDeck}":
+${sessionSummary}
+
+${existingProgress ? `Previous progress observations:\n${existingProgress}` : 'No previous observations — this is the first session.'}
+
+Respond with TWO sections separated by "---":
+
+SECTION 1: Brief insight message for the student (2-4 sentences). Mention what they did well, what they struggled with, and any improvements from previous observations.
+
+---
+
+SECTION 2: Updated progress-observations.md content. Keep the format:
+# Progress Observations — ${studyDeck}
+Last updated: ${new Date().toISOString().split('T')[0]}
+
+## Current Struggles
+(list items)
+
+## Improving
+(items that were struggles but are getting better)
+
+## Mastered (recently)
+(items no longer a problem)`
+
+      const text = await providerConfig.call(apiKey, 'You analyze study session results and track learning progress.', prompt)
+      const parts = text.split('---')
+      const insight = parts[0]?.trim() || text
+      const newProgress = parts[1]?.trim()
+
+      setStudyInsights(insight)
+
+      // Save updated progress observations
+      if (newProgress) {
+        try {
+          await fetch('/api/deck-progress', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ deck: studyDeck, content: newProgress }),
+          })
+          console.log('[Study] progress observations updated for:', studyDeck)
+        } catch {}
+      }
+    } catch (err) {
+      setStudyInsights('Could not generate insights: ' + err.message)
+    } finally {
+      setStudyInsightsLoading(false)
+    }
+  }
+
+  // Wrap Up — stop loading new cards, finish current batch
+  const studyWrapUp = () => {
+    setStudyWrappingUp(true)
+  }
+
+  // End Now — immediately go to summary with partial results
+  const studyEndNow = () => {
+    // Rate any unfinished cards as "again"
+    const newStates = [...studyCardState]
+    newStates.forEach((cs) => {
+      if (!cs.done) {
+        cs.done = true
+        cs.rating = 'again'
+        setStudyStats((prev) => ({ ...prev, again: prev.again + 1 }))
+      }
+    })
+    setStudyCardState(newStates)
+    setStudyPhase('summary')
+    setStudyWrappingUp(false)
+  }
+
+  // "I know this" — delete card from Anki
+  const studyDeleteKnownCard = async (cardIdx) => {
+    const cs = studyCardState[cardIdx]
+    try {
+      // Find the noteId from the card
+      const card = studyAllCards.find(c => c.cardId === cs.cardId)
+      if (card) {
+        await ankiDeleteNotes([card.note])
+        ankiSync().catch(() => {})
+      }
+      // Mark as done + deleted, skip remaining questions
+      const newStates = [...studyCardState]
+      newStates[cardIdx] = { ...newStates[cardIdx], done: true, rating: 'deleted' }
+      setStudyCardState(newStates)
+      // Remove remaining questions for this card from queue
+      const newQueue = studyQueue.filter((q, i) => i <= studyQueueIdx || q.cardIdx !== cardIdx)
+      setStudyQueue(newQueue)
+      setStudyDeleteConfirm(null)
+      // If no more questions, go to batch feedback
+      if (studyQueueIdx + 1 >= newQueue.length) {
+        setStudyPhase('batchFeedback')
+      }
+    } catch (err) {
+      console.error('[Study] delete failed:', err.message)
+      setStudyDeleteConfirm(null)
+    }
+  }
+
+  // Chat about feedback for a specific card — can fix typos, re-rate, update card
+  const sendStudyFeedbackChat = async (cardIdx) => {
+    const chat = studyFeedbackChat[cardIdx] || { messages: [], input: '', loading: false }
+    const q = chat.input?.trim()
+    if (!q || !apiKey || chat.loading) return
+    const cs = studyCardState[cardIdx]
+    const newMessages = [...(chat.messages || []), { role: 'user', text: q }]
+    setStudyFeedbackChat(prev => ({ ...prev, [cardIdx]: { ...chat, messages: newMessages, input: '', loading: true } }))
+    try {
+      const resultsContext = cs.questions.map((question, qi) =>
+        `Q${qi+1}: ${question}\nAnswer: ${cs.answers[qi] || '(skipped)'}\nResult: ${cs.results[qi]?.correct ? 'Correct' : 'Incorrect'} — ${cs.results[qi]?.feedback}`
+      ).join('\n\n')
+      const systemPrompt = `You are a study tutor. The student just studied this flashcard:
+Front: "${cs.front}"
+Back: "${cs.back}"
+
+Their results:
+${resultsContext}
+
+The student may:
+1. Report a typo (e.g. "claor was a typo, I meant claro") — if their intended answer would be correct, include <action>{"type":"fix_typo","questionIndex":N,"correctedAnswer":"...","shouldBeCorrect":true}</action> in your response.
+2. Flag an out-of-scope question — if the question was genuinely unfair or ambiguous, include <action>{"type":"bad_question","questionIndex":N,"reason":"..."}</action> and suggest how to clarify the card.
+3. Ask to update the Anki card for clarity — if the card itself is ambiguous, include <action>{"type":"update_card","newFront":"...","newBack":"..."}</action> with improved content.
+
+Respond naturally in 1-3 sentences, then include action tags if applicable. You can include multiple actions.`
+      const fullPrompt = newMessages.map(m => `${m.role === 'user' ? 'User' : 'Tutor'}: ${m.text}`).join('\n')
+      const text = await providerConfig.call(apiKey, systemPrompt, fullPrompt)
+
+      // Parse and execute actions from the response
+      const actionMatches = [...text.matchAll(/<action>(.*?)<\/action>/gs)]
+      const cleanText = text.replace(/<action>.*?<\/action>/gs, '').trim()
+      let updatedStates = null
+
+      for (const match of actionMatches) {
+        try {
+          const action = JSON.parse(match[1])
+          if (action.type === 'fix_typo' && action.shouldBeCorrect) {
+            // Re-evaluate: mark the question as correct
+            if (!updatedStates) updatedStates = [...studyCardState]
+            const qi = action.questionIndex
+            if (qi >= 0 && qi < updatedStates[cardIdx].results.length) {
+              updatedStates[cardIdx] = { ...updatedStates[cardIdx] }
+              updatedStates[cardIdx].results = [...updatedStates[cardIdx].results]
+              updatedStates[cardIdx].results[qi] = { ...updatedStates[cardIdx].results[qi], correct: true, feedback: `Typo corrected: "${action.correctedAnswer}" — Correct!` }
+              updatedStates[cardIdx].answers = [...updatedStates[cardIdx].answers]
+              updatedStates[cardIdx].answers[qi] = action.correctedAnswer + ' (corrected)'
+            }
+          } else if (action.type === 'update_card') {
+            // Update the Anki card
+            const card = studyAllCards.find(c => c.cardId === cs.cardId)
+            if (card) {
+              const fields = card.fields ? Object.entries(card.fields).sort(([,a],[,b]) => a.order - b.order) : []
+              const updates = {}
+              if (fields[0]) updates[fields[0][0]] = (action.newFront || '').replace(/\n/g, '<br>')
+              if (fields[1]) updates[fields[1][0]] = (action.newBack || '').replace(/\n/g, '<br>')
+              await ankiUpdateNote(card.note, updates)
+              ankiSync().catch(() => {})
+            }
+          }
+        } catch {}
+      }
+
+      // Re-rate the card if results were changed
+      if (updatedStates) {
+        const qpc = updatedStates[cardIdx].results.length
+        const wrongCount = updatedStates[cardIdx].results.filter(r => !r.correct || r.grammarRelevant).length
+        let label
+        if (wrongCount === 0) label = 'easy'
+        else if (wrongCount === 1) label = 'good'
+        else if (wrongCount >= qpc) label = 'again'
+        else label = 'hard'
+        // Update stats: remove old rating, add new
+        const oldRating = updatedStates[cardIdx].rating
+        if (oldRating && oldRating !== label) {
+          setStudyStats(prev => ({ ...prev, [oldRating]: Math.max(0, prev[oldRating] - 1), [label]: prev[label] + 1 }))
+        }
+        updatedStates[cardIdx].rating = label
+        setStudyCardState(updatedStates)
+      }
+
+      setStudyFeedbackChat(prev => ({
+        ...prev,
+        [cardIdx]: { messages: [...newMessages, { role: 'assistant', text: cleanText }], input: '', loading: false }
+      }))
+    } catch (err) {
+      setStudyFeedbackChat(prev => ({
+        ...prev,
+        [cardIdx]: { messages: [...newMessages, { role: 'assistant', text: 'Error: ' + err.message }], input: '', loading: false }
+      }))
+    }
+  }
+
+  // ─── Chat Tab Functions ──────────────────────────────────────────────────
+  const chatTabAttachDeck = async (deckName) => {
+    if (!deckName) { setChatTabAttachedDeck(null); return }
+    setChatTabAttachLoading(true)
+    try {
+      const noteIds = await ankiFindNotes(`deck:"${deckName}"`)
+      const notes = noteIds.length > 0 ? await ankiNotesInfo(noteIds.slice(0, 100)) : []
+      const cards = notes.map(n => {
+        const fields = Object.values(n.fields).sort((a, b) => a.order - b.order)
+        return { front: stripHtml(fields[0]?.value || ''), back: stripHtml(fields[1]?.value || '') }
+      })
+      // Load progress observations
+      let progress = ''
+      try {
+        const r = await fetch(`/api/deck-progress?deck=${encodeURIComponent(deckName)}`)
+        const d = await r.json()
+        progress = d.content || ''
+      } catch {}
+      setChatTabAttachedDeck({ name: deckName, cards, progress })
+    } catch (err) {
+      console.error('[Chat] attach deck failed:', err)
+    } finally {
+      setChatTabAttachLoading(false)
+    }
+  }
+
+  const sendChatTabMessage = async () => {
+    const q = chatTabInput.trim()
+    if (!q || !apiKey || chatTabLoading) return
+    const newMsgs = [...chatTabMsgs, { role: 'user', content: q }]
+    setChatTabMsgs(newMsgs)
+    setChatTabInput('')
+    setChatTabLoading(true)
+    setTimeout(() => chatTabScrollRef.current?.scrollTo({ top: chatTabScrollRef.current.scrollHeight, behavior: 'smooth' }), 50)
+    try {
+      let systemPrompt = `You are a helpful study assistant. The user is studying with mode "${activeMode.name}".
+
+IMPORTANT BEHAVIOR RULES:
+1. When the user asks you to "make a deck" or "create cards" for a topic:
+   - DO NOT immediately generate cards
+   - Instead, ASK the user: "I can help with that! Would you like me to: (1) Search for top-rated existing Anki decks for this topic online, or (2) Generate custom cards based on specific objectives or materials you provide?"
+   - If they want to search: suggest they use the "Find Decks" feature (coming soon), or recommend searching AnkiWeb at ankiweb.net/shared/decks for "[topic]" and advise what to look for (high ratings, recent updates, comprehensive coverage)
+   - If they want custom cards: ask what specific topics, chapters, or objectives to cover. Ask if they have materials in their Knowledge Base. Then generate cards systematically by topic.
+
+2. When creating flashcards (after the user confirms what they want):
+   - Generate cards one topic at a time, not all at once
+   - Use this JSON format wrapped in <anki-card> tags:
+   {"front": "...", "back": "...", "tags": [...]}
+   - Make cards high quality: clear fronts, comprehensive backs, relevant tags
+   - Ask if they want more cards on the same topic or move to the next
+
+3. For general questions: be concise and helpful. Explain concepts clearly.
+
+4. NEVER dump a wall of cards without asking first. Quality over quantity.`
+
+      // Web search if enabled
+      if (chatTabWebSearch) {
+        systemPrompt += '\n\n5. You have WEB SEARCH capability. Search results from the internet are provided below. You MUST use them to answer the user\'s question. Do NOT say you cannot search the internet — the search has already been performed for you.'
+        try {
+          const searchRes = await fetch(`/api/web-search?q=${encodeURIComponent(q)}`)
+          const searchData = await searchRes.json()
+          if (searchData.results?.length > 0) {
+            systemPrompt += `\n\nWEB SEARCH RESULTS for "${q}":\n` +
+              searchData.results.map((r, i) => `${i + 1}. ${r.title}\n   URL: ${r.url}\n   ${r.snippet}`).join('\n\n') +
+              '\n\nBase your answer on these search results. Cite the source URLs when referencing specific information.'
+          } else {
+            systemPrompt += '\n\nWeb search returned no results. Answer from your own knowledge but mention the search found nothing.'
+          }
+        } catch {
+          systemPrompt += '\n\nWeb search failed. Answer from your own knowledge but mention the search encountered an error.'
+        }
+      }
+
+      if (chatTabAttachedDeck) {
+        const cardSummary = chatTabAttachedDeck.cards.map(c => `• ${c.front} → ${c.back}`).join('\n')
+        systemPrompt += `\n\nThe user has attached their Anki deck "${chatTabAttachedDeck.name}" (${chatTabAttachedDeck.cards.length} cards).
+${chatTabAttachedDeck.progress ? `Progress observations:\n${chatTabAttachedDeck.progress}\n` : ''}
+Card contents (all ${chatTabAttachedDeck.cards.length} cards):\n${cardSummary}
+
+Focus on their weak areas. If you discover new struggles or notice improvement, wrap observation updates in <progress-update>new content for the file</progress-update> tags.`
+      }
+
+      const convo = newMsgs.map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n\n')
+      const text = await providerConfig.call(apiKey, systemPrompt, convo)
+
+      // Parse anki cards from response
+      const cardMatches = [...text.matchAll(/<anki-card>(.*?)<\/anki-card>/gs)]
+      const parsedCards = cardMatches.map(m => { try { return JSON.parse(m[1]) } catch { return null } }).filter(Boolean)
+
+      // Parse progress updates
+      const progressMatches = [...text.matchAll(/<progress-update>([\s\S]*?)<\/progress-update>/g)]
+      if (progressMatches.length > 0 && chatTabAttachedDeck) {
+        for (const pm of progressMatches) {
+          try {
+            await fetch('/api/deck-progress', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ deck: chatTabAttachedDeck.name, content: pm[1].trim() }),
+            })
+            setChatTabAttachedDeck(prev => prev ? { ...prev, progress: pm[1].trim() } : prev)
+          } catch {}
+        }
+      }
+
+      const cleanText = text.replace(/<anki-card>.*?<\/anki-card>/gs, '').replace(/<progress-update>[\s\S]*?<\/progress-update>/g, '').trim()
+      const assistantMsg = { role: 'assistant', content: cleanText, cards: parsedCards.length > 0 ? parsedCards : undefined }
+      const updatedMsgs = [...newMsgs, assistantMsg]
+      setChatTabMsgs(updatedMsgs)
+      setTimeout(() => chatTabScrollRef.current?.scrollTo({ top: chatTabScrollRef.current.scrollHeight, behavior: 'smooth' }), 50)
+      // Auto-save to disk after each response
+      const savedId = await chatTabSaveCurrent(updatedMsgs, chatTabSessionId)
+      if (!chatTabSessionId) setChatTabSessionId(savedId)
+    } catch (err) {
+      setChatTabMsgs(prev => [...prev, { role: 'assistant', content: 'Error: ' + err.message }])
+    } finally {
+      setChatTabLoading(false)
+    }
+  }
+
+  const chatTabSyncCard = async (card, msgIdx) => {
+    if (!ankiConnected) return
+    const deck = ankiDeck || ankiDecks[0] || 'Default'
+    try {
+      await ankiAddNote(deck, card.front, card.back, card.tags || ['screenlens'])
+      ankiSync().catch(() => {})
+      // Mark card as synced in the message
+      setChatTabMsgs(prev => prev.map((m, i) => {
+        if (i !== msgIdx || !m.cards) return m
+        return { ...m, cards: m.cards.map(c => c === card ? { ...c, synced: true } : c) }
+      }))
+    } catch (err) {
+      console.error('[Chat] sync card failed:', err)
+    }
+  }
+
+  // Save current chat to disk
+  const chatTabSaveCurrent = async (msgs, sessionId, title, { refreshList = true } = {}) => {
+    if (!msgs || msgs.length === 0) return sessionId
+    const chatTitle = title || msgs[0]?.content?.slice(0, 40) || 'Untitled'
+    try {
+      const res = await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: sessionId || undefined, title: chatTitle, messages: msgs }),
+      })
+      const data = await res.json()
+      if (refreshList) {
+        const sessions = await fetch('/api/chats').then(r => r.json()).catch(() => [])
+        setChatTabSessions(sessions)
+      }
+      return data.id
+    } catch (err) {
+      console.error('[Chat] save failed:', err)
+      return sessionId
+    }
+  }
+
+  const chatTabNewChat = async () => {
+    // Save current session if it has messages
+    if (chatTabMsgs.length > 0) {
+      await chatTabSaveCurrent(chatTabMsgs, chatTabSessionId)
+    }
+    setChatTabMsgs([])
+    setChatTabSessionId(null)
+  }
+
+  const chatTabLoadSession = async (session) => {
+    // Save current first (don't refresh list — avoid reordering)
+    if (chatTabMsgs.length > 0 && chatTabSessionId !== session.id) {
+      await chatTabSaveCurrent(chatTabMsgs, chatTabSessionId, undefined, { refreshList: false })
+    }
+    // Load full messages from disk
+    try {
+      const data = await fetch(`/api/chat-load?id=${encodeURIComponent(session.id)}`).then(r => r.json())
+      const msgs = (data.messages || []).map(m => ({ ...m, content: m.content || m.text }))
+      setChatTabMsgs(msgs)
+      setChatTabSessionId(session.id)
+    } catch {
+      setChatTabMsgs([])
+      setChatTabSessionId(session.id)
+    }
+  }
+
+  const chatTabDeleteSession = async (id) => {
+    try {
+      await fetch(`/api/chats?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
+      setChatTabSessions(prev => prev.filter(s => s.id !== id))
+      if (chatTabSessionId === id) { setChatTabMsgs([]); setChatTabSessionId(null) }
+    } catch {}
+  }
+
+  const chatTabRenameSession = async (id, newTitle) => {
+    // Load the session, update title, save back
+    try {
+      const data = await fetch(`/api/chat-load?id=${encodeURIComponent(id)}`).then(r => r.json())
+      await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, title: newTitle, messages: data.messages }),
+      })
+      setChatTabSessions(prev => prev.map(s => s.id === id ? { ...s, title: newTitle } : s))
+      setChatTabEditingTitle(null)
+    } catch {}
   }
 
   // ─── AI Mode Creation ────────────────────────────────────────────────────
@@ -2210,21 +2762,24 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
           </svg>
           <h1 style={S.title}>ScreenLens</h1>
           <span style={S.badge}>LOCAL</span>
+          <div style={S.tabBar}>
+            {['chat', 'study', 'picture', 'stats'].map((tab) => (
+              <button
+                key={tab}
+                onClick={() => {
+                  setActiveTab(tab)
+                  setChatSidePanel(false)
+                }}
+                style={{ ...S.tab, ...(activeTab === tab ? S.tabActive : {}) }}
+              >
+                {{ chat: 'Chat', study: 'Study', picture: 'Picture', stats: 'Stats' }[tab]}
+              </button>
+            ))}
+          </div>
         </div>
         <div style={S.headerRight}>
-          {activeMode.type === 'language' && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#1c2129', border: '1px solid #2a3040', borderRadius: 6, padding: '2px 4px' }}>
-              <select value={language} onChange={(e) => setLanguage(e.target.value)} style={{ ...S.select, border: 'none', background: 'transparent', padding: '4px 6px' }}>
-                {LANGS.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
-              </select>
-              <span style={{ color: '#58a6ff', fontSize: 14, fontWeight: 700 }}>→</span>
-              <select value={targetLang} onChange={(e) => setTargetLang(e.target.value)} style={{ ...S.select, border: 'none', background: 'transparent', padding: '4px 6px' }}>
-                {LANGS.filter((l) => l.code !== 'auto').map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
-              </select>
-            </div>
-          )}
-
-          {stage === 'done' && (
+          {/* Picture tab: context buttons */}
+          {activeTab === 'picture' && stage === 'done' && (
             <button onClick={() => setShowHighlights(!showHighlights)} style={{
               ...S.ghostBtn,
               color: showHighlights ? '#d2a8ff' : '#7d8590',
@@ -2234,22 +2789,13 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
             </button>
           )}
 
-          {stage !== 'idle' && <button onClick={reset} style={S.ghostBtn}>New</button>}
+          {activeTab === 'picture' && stage !== 'idle' && <button onClick={reset} style={S.ghostBtn}>New</button>}
 
-          {screenshot && !loading && stage === 'done' && (
+          {activeTab === 'picture' && screenshot && !loading && stage === 'done' && (
             <button onClick={() => analyzeImage(screenshot)} style={S.ghostBtn}>Re-analyze</button>
           )}
 
-          <select
-            value={provider}
-            onChange={(e) => setProvider(e.target.value)}
-            style={{ ...S.select, borderColor: `${providerConfig.color}44`, color: providerConfig.color }}
-          >
-            {Object.entries(PROVIDERS).map(([key, p]) => (
-              <option key={key} value={key}>{p.label}</option>
-            ))}
-          </select>
-
+          {/* Mode selector + Settings gear — always visible */}
           <div style={{ display: 'flex', gap: 0 }}>
             <button onClick={() => { setShowModePanel(!showModePanel); if (showModePanel) setModeSettingsTab(null) }} style={{
               ...S.ghostBtn, color: '#58a6ff', borderColor: 'rgba(88,166,255,0.25)',
@@ -2270,105 +2816,88 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
             </button>
           </div>
 
-          {ankiConnected && (
-            <>
-              <button onClick={() => { if (studyActive) { exitStudy() } else { closeDeckBrowser(); startStudySession() } }} disabled={studyLoading} style={{
-                ...S.ghostBtn,
-                color: studyActive ? '#e6edf3' : '#ffa657',
-                borderColor: studyActive ? 'rgba(230,237,243,0.3)' : 'rgba(255,166,87,0.25)',
-                opacity: studyLoading ? 0.5 : 1,
-              }}>
-                {studyLoading ? 'Loading...' : 'Study'}
-              </button>
-              <button onClick={() => { if (deckBrowserActive) { closeDeckBrowser() } else { exitStudy(); openDeckBrowser() } }} style={{
-                ...S.ghostBtn,
-                color: deckBrowserActive ? '#e6edf3' : '#d2a8ff',
-                borderColor: deckBrowserActive ? 'rgba(230,237,243,0.3)' : 'rgba(210,168,255,0.25)',
-              }}>
-                Deck
-              </button>
-            </>
-          )}
-
+          {/* AI Provider button — replaces provider dropdown + Key Set */}
           <button onClick={() => setShowKeyInput(!showKeyInput)} style={{
             ...S.ghostBtn,
-            color: apiKey ? '#7ee787' : '#f85149',
-            borderColor: apiKey ? 'rgba(126,231,135,0.25)' : 'rgba(248,81,73,0.25)',
+            color: providerConfig.color,
+            borderColor: `${providerConfig.color}44`,
           }}>
-            {apiKey ? '🔑 Key Set' : '🔑 Set Key'}
+            {providerConfig.label} {apiKey ? '' : '(no key)'}
           </button>
 
-          <div style={S.captureGroup}>
-            <button onClick={captureScreen} disabled={loading} style={S.captureBtn}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" style={{ marginRight: 7 }}>
-                <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"
-                  stroke="currentColor" strokeWidth="2" strokeLinejoin="round"/>
-                <circle cx="12" cy="13" r="4" stroke="currentColor" strokeWidth="2"/>
-              </svg>
-              Capture
-            </button>
-            <button onClick={() => fileInputRef.current?.click()} disabled={loading} style={S.uploadBtn}>
-              Upload
-            </button>
-          </div>
+          {/* Picture tab: Capture, Upload, Overlay */}
+          {activeTab === 'picture' && (
+            <>
+              <div style={S.captureGroup}>
+                <button onClick={captureScreen} disabled={loading} style={S.captureBtn}>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" style={{ marginRight: 7 }}>
+                    <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"
+                      stroke="currentColor" strokeWidth="2" strokeLinejoin="round"/>
+                    <circle cx="12" cy="13" r="4" stroke="currentColor" strokeWidth="2"/>
+                  </svg>
+                  Capture
+                </button>
+                <button onClick={() => fileInputRef.current?.click()} disabled={loading} style={S.uploadBtn}>
+                  Upload
+                </button>
+              </div>
 
-          <button onClick={async () => {
-            if (overlayRunning) {
-              // Stop overlay
-              try {
-                await fetch('/api/launch-overlay', { method: 'DELETE' })
-                setOverlayRunning(false)
-              } catch {}
-            } else {
-              // Start overlay
-              try {
-                const r = await fetch('/api/launch-overlay', { method: 'POST' })
-                const d = await r.json()
-                if (d.error) { alert(d.error) }
-                else { setOverlayRunning(true) }
-              } catch (err) {
-                alert('Failed to launch overlay: ' + err.message)
-              }
-            }
-          }} style={{
-            ...S.ghostBtn,
-            color: overlayRunning ? '#7ee787' : '#7d8590',
-            borderColor: overlayRunning ? 'rgba(126,231,135,0.3)' : '#2a3040',
-            background: overlayRunning ? 'rgba(126,231,135,0.08)' : 'transparent',
-          }}>
-            {overlayRunning ? '\u25CF' : '\u25CB'} Overlay
-          </button>
+              <button onClick={async () => {
+                if (overlayRunning) {
+                  try { await fetch('/api/launch-overlay', { method: 'DELETE' }); setOverlayRunning(false) } catch {}
+                } else {
+                  try {
+                    const r = await fetch('/api/launch-overlay', { method: 'POST' })
+                    const d = await r.json()
+                    if (d.error) { alert(d.error) } else { setOverlayRunning(true) }
+                  } catch (err) { alert('Failed to launch overlay: ' + err.message) }
+                }
+              }} style={{
+                ...S.ghostBtn,
+                color: overlayRunning ? '#7ee787' : '#7d8590',
+                borderColor: overlayRunning ? 'rgba(126,231,135,0.3)' : '#2a3040',
+                background: overlayRunning ? 'rgba(126,231,135,0.08)' : 'transparent',
+              }}>
+                {overlayRunning ? '\u25CF' : '\u25CB'} Overlay
+              </button>
 
-          <kbd style={S.kbd}>Ctrl+Shift+S</kbd>
+              <kbd style={S.kbd}>Ctrl+Shift+S</kbd>
+            </>
+          )}
         </div>
       </header>}
 
-      {/* ── API Key Input ────────────────────────────────────────────────────── */}
+      {/* ── AI Provider Settings ──────────────────────────────────────────── */}
       {showKeyInput && (
-        <div style={S.keyBar}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ width: 8, height: 8, borderRadius: '50%', background: providerConfig.color, flexShrink: 0 }} />
-            <label style={S.keyLabel}>{providerConfig.label} API Key:</label>
+        <div style={{ ...S.keyBar, flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: '#e6edf3' }}>AI Provider Settings</span>
+            <button onClick={() => setShowKeyInput(false)} style={{ ...S.ghostBtn, fontSize: 10, padding: '3px 8px' }}>Close</button>
           </div>
-          <input
-            type="password"
-            value={apiKey}
-            onChange={(e) => setCurrentKey(e.target.value)}
-            placeholder={providerConfig.placeholder}
-            style={S.keyInput}
-          />
-          <a
-            href={providerConfig.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={S.getKeyLink}
-          >
-            Get key
-          </a>
-          <button onClick={() => setShowKeyInput(false)} style={S.keyDone}>
-            {apiKey ? 'Done' : 'Close'}
-          </button>
-          <span style={{ fontSize: 11, color: '#7d8590' }}>Stored in localStorage only</span>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {Object.entries(PROVIDERS).map(([key, p]) => (
+              <button key={key} onClick={() => setProvider(key)} style={{
+                ...S.ghostBtn, fontSize: 11, padding: '4px 12px',
+                color: provider === key ? p.color : '#7d8590',
+                borderColor: provider === key ? `${p.color}66` : '#2a3040',
+                background: provider === key ? `${p.color}11` : 'transparent',
+              }}>
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: apiKeys[key] ? '#7ee787' : '#484f58', display: 'inline-block', marginRight: 6 }} />
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input
+              type="password"
+              value={apiKey}
+              onChange={(e) => setCurrentKey(e.target.value)}
+              placeholder={providerConfig.placeholder}
+              style={{ ...S.keyInput, flex: 1 }}
+            />
+            <a href={providerConfig.url} target="_blank" rel="noopener noreferrer" style={S.getKeyLink}>Get key</a>
+          </div>
+          <span style={{ fontSize: 10, color: '#484f58' }}>Keys stored in localStorage only</span>
         </div>
       )}
 
@@ -2461,6 +2990,27 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
               </span>
             )}
           </div>
+          {/* Language Settings */}
+          {activeMode.type === 'language' && (
+            <div style={{
+              padding: '8px 12px', borderRadius: 6,
+              background: 'rgba(88,166,255,.06)', border: '1px solid rgba(88,166,255,.25)',
+            }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#58a6ff', marginBottom: 6 }}>Language Settings</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 11, color: '#7d8590' }}>Source:</span>
+                <select value={language} onChange={(e) => setLanguage(e.target.value)} style={{ ...S.select, fontSize: 11, flex: 1, minWidth: 120 }}>
+                  {LANGS.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
+                </select>
+                <span style={{ color: '#58a6ff', fontWeight: 700 }}>→</span>
+                <span style={{ fontSize: 11, color: '#7d8590' }}>Target:</span>
+                <select value={targetLang} onChange={(e) => setTargetLang(e.target.value)} style={{ ...S.select, fontSize: 11, flex: 1, minWidth: 120 }}>
+                  {LANGS.filter((l) => l.code !== 'auto').map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
+                </select>
+              </div>
+            </div>
+          )}
+
           {/* Anki — top-level collapsible */}
           <button
             onClick={() => { setShowAnkiSection(!showAnkiSection); setSettingsSection(null) }}
@@ -2698,7 +3248,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
       )}
 
       {/* ── Deck Browser ─────────────────────────────────────────────────────── */}
-      {deckBrowserActive && (
+      {activeTab === 'study' && deckBrowserActive && (
         <main style={{ ...S.main, display: 'flex', flexDirection: 'column', padding: 20 }}>
           <div style={{ maxWidth: 800, width: '100%', margin: '0 auto' }}>
             {/* Header */}
@@ -2799,8 +3349,306 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
         </main>
       )}
 
+      {/* ── Study Tab Home (no active session or browser) ─────────────────── */}
+      {activeTab === 'study' && !studyActive && !deckBrowserActive && (
+        <main style={{ ...S.main, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
+          <div style={{ maxWidth: 400, width: '100%', textAlign: 'center', padding: '40px 20px' }}>
+            <div style={{ fontSize: 20, fontWeight: 700, color: '#e6edf3', marginBottom: 16 }}>Study</div>
+            <div style={{ fontSize: 12, color: '#7d8590', marginBottom: 24 }}>Review your Anki cards with AI-powered quizzes or browse your decks.</div>
+            <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+              <button
+                onClick={() => { closeDeckBrowser(); startStudySession() }}
+                disabled={studyLoading || ankiConnected === false}
+                style={{ ...S.captureBtn, borderRadius: 8, fontSize: 13, padding: '10px 24px', opacity: (studyLoading || ankiConnected === false) ? 0.5 : 1 }}
+              >
+                {studyLoading ? 'Loading...' : 'Study Now'}
+              </button>
+              <button
+                onClick={() => { exitStudy(); openDeckBrowser() }}
+                disabled={ankiConnected === false}
+                style={{ ...S.ghostBtn, fontSize: 13, padding: '10px 24px', color: '#d2a8ff', borderColor: 'rgba(210,168,255,0.25)', opacity: ankiConnected === false ? 0.5 : 1 }}
+              >
+                Browse Deck
+              </button>
+            </div>
+            {ankiConnected === false && (
+              <div style={{ fontSize: 11, color: '#d29922', marginTop: 12 }}>Anki is not connected. Start Anki with AnkiConnect addon.</div>
+            )}
+            {ankiConnected === null && (
+              <div style={{ fontSize: 11, color: '#7d8590', marginTop: 12 }}>Checking Anki connection...</div>
+            )}
+          </div>
+        </main>
+      )}
+
+      {/* ── Chat Tab ─────────────────────────────────────────────────────────── */}
+      {activeTab === 'chat' && (
+        <main style={{ ...S.main, display: 'flex', padding: 0, overflow: 'hidden' }}>
+          {/* Session sidebar */}
+          <div style={{ width: 200, borderRight: '1px solid #2a3040', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+            <button onClick={chatTabNewChat} style={{ ...S.captureBtn, margin: 8, borderRadius: 6, fontSize: 11, padding: '8px 12px' }}>
+              + New Chat
+            </button>
+            <div style={{ flex: 1, overflow: 'auto', padding: '0 8px 8px' }}>
+              {chatTabSessions.map(s => (
+                <div key={s.id} onClick={() => chatTabLoadSession(s)} style={{
+                  padding: '6px 8px', borderRadius: 4, fontSize: 10, color: chatTabSessionId === s.id ? '#e6edf3' : '#7d8590',
+                  background: chatTabSessionId === s.id ? '#1c2129' : 'transparent',
+                  cursor: 'pointer', marginBottom: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                }}>
+                  {chatTabEditingTitle === s.id ? (
+                    <input
+                      autoFocus
+                      defaultValue={s.title}
+                      onClick={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => { if (e.key === 'Enter') chatTabRenameSession(s.id, e.target.value); if (e.key === 'Escape') setChatTabEditingTitle(null) }}
+                      onBlur={(e) => chatTabRenameSession(s.id, e.target.value)}
+                      style={{ background: '#161b22', color: '#e6edf3', border: '1px solid #2a3040', borderRadius: 3, fontSize: 10, padding: '2px 4px', width: '100%', fontFamily: 'inherit' }}
+                    />
+                  ) : (
+                    <span onDoubleClick={(e) => { e.stopPropagation(); setChatTabEditingTitle(s.id) }} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                      {s.type === 'help' && <span style={{ color: '#58a6ff', marginRight: 4, fontSize: 9 }}>?</span>}
+                      {s.title}
+                    </span>
+                  )}
+                  <span onClick={(e) => { e.stopPropagation(); chatTabDeleteSession(s.id) }} style={{ color: '#484f58', cursor: 'pointer', marginLeft: 4 }}>&times;</span>
+                </div>
+              ))}
+              {chatTabSessions.length === 0 && <div style={{ fontSize: 10, color: '#484f58', padding: 8, textAlign: 'center' }}>No saved chats</div>}
+            </div>
+          </div>
+
+          {/* Chat area */}
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+            {/* Attached deck indicator */}
+            {chatTabAttachedDeck && (
+              <div style={{ padding: '6px 16px', borderBottom: '1px solid #2a3040', display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#58a6ff' }}>
+                <span>Attached: {chatTabAttachedDeck.name} ({chatTabAttachedDeck.cards.length} cards)</span>
+                <span onClick={() => setChatTabAttachedDeck(null)} style={{ cursor: 'pointer', color: '#7d8590' }}>&times;</span>
+              </div>
+            )}
+
+            {/* Messages */}
+            <div ref={chatTabScrollRef} style={{ flex: 1, overflow: 'auto', padding: '16px 20px' }}>
+              {chatTabMsgs.length === 0 && (
+                <div style={{ textAlign: 'center', padding: '60px 20px' }}>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: '#e6edf3', marginBottom: 8 }}>AI Study Assistant</div>
+                  <div style={{ fontSize: 12, color: '#7d8590', marginBottom: 20, maxWidth: 400, margin: '0 auto 20px' }}>
+                    Ask questions, create Anki cards, or attach a deck for personalized tutoring.
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
+                    {['Explain subnetting', 'Make me a flashcard about DNS', 'Help me with verb conjugations'].map(hint => (
+                      <button key={hint} onClick={() => { setChatTabInput(hint) }} style={{ ...S.ghostBtn, fontSize: 10, padding: '6px 12px' }}>
+                        {hint}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {chatTabMsgs.map((m, i) => (
+                <div key={i} style={{ marginBottom: 12, display: 'flex', flexDirection: 'column', alignItems: m.role === 'user' ? 'flex-end' : 'flex-start' }}>
+                  <div style={{
+                    maxWidth: '80%', padding: '10px 14px', borderRadius: 10, fontSize: 13, lineHeight: 1.5,
+                    background: m.role === 'user' ? 'rgba(88,166,255,.12)' : '#1c2129',
+                    border: `1px solid ${m.role === 'user' ? 'rgba(88,166,255,.2)' : '#2a3040'}`,
+                    color: '#e6edf3', whiteSpace: 'pre-wrap',
+                  }}>
+                    {m.content}
+                  </div>
+                  {/* Inline Anki card previews */}
+                  {m.cards?.map((card, ci) => (
+                    <div key={ci} style={{
+                      maxWidth: '80%', marginTop: 6, padding: '10px 14px', borderRadius: 8,
+                      background: '#161b22', border: '1px solid #2a3040',
+                    }}>
+                      <div style={{ fontSize: 10, color: '#7d8590', fontWeight: 600, marginBottom: 4 }}>ANKI CARD</div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: '#e6edf3', marginBottom: 4 }}>{card.front}</div>
+                      <div style={{ fontSize: 11, color: '#c9d1d9', whiteSpace: 'pre-line', marginBottom: 6 }}>{card.back}</div>
+                      {card.tags?.length > 0 && (
+                        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 6 }}>
+                          {card.tags.map((t, ti) => <span key={ti} style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: 'rgba(125,133,144,.15)', color: '#7d8590' }}>{t}</span>)}
+                        </div>
+                      )}
+                      {card.synced ? (
+                        <span style={{ fontSize: 10, color: '#7ee787' }}>Synced to Anki</span>
+                      ) : (
+                        <button onClick={() => chatTabSyncCard(card, i)} disabled={!ankiConnected}
+                          style={{ ...S.ghostBtn, fontSize: 10, padding: '3px 10px', color: '#7ee787', borderColor: 'rgba(126,231,135,.3)', opacity: ankiConnected ? 1 : 0.4 }}>
+                          Sync to Anki
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ))}
+              {chatTabLoading && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#7d8590', fontSize: 12, padding: '8px 0' }}>
+                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#58a6ff', animation: 'pulse 1.5s ease infinite' }} />
+                  Thinking...
+                </div>
+              )}
+            </div>
+
+            {/* Input bar */}
+            <div style={{ padding: '12px 16px', borderTop: '1px solid #2a3040', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {/* Attach deck row */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {!chatTabAttachedDeck && ankiConnected && (
+                  <select
+                    value=""
+                    onChange={(e) => { if (e.target.value) chatTabAttachDeck(e.target.value) }}
+                    style={{ ...S.select, fontSize: 10, padding: '3px 6px', color: '#7d8590', maxWidth: 160 }}
+                  >
+                    <option value="">Attach deck...</option>
+                    {ankiDecks.map(d => <option key={d} value={d}>{d}</option>)}
+                  </select>
+                )}
+                {chatTabAttachLoading && <span style={{ fontSize: 10, color: '#7d8590' }}>Loading deck...</span>}
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <button
+                  onClick={() => setChatTabWebSearch(prev => !prev)}
+                  title={chatTabWebSearch ? 'Web search enabled' : 'Enable web search'}
+                  style={{
+                    background: chatTabWebSearch ? 'rgba(88,166,255,.15)' : 'transparent',
+                    border: `1px solid ${chatTabWebSearch ? '#58a6ff' : '#2a3040'}`,
+                    color: chatTabWebSearch ? '#58a6ff' : '#484f58',
+                    borderRadius: 6, padding: '8px 10px', cursor: 'pointer',
+                    fontSize: 14, lineHeight: 1, fontFamily: 'inherit',
+                    transition: 'all 0.15s',
+                  }}
+                >&#127760;</button>
+                <input
+                  value={chatTabInput}
+                  onChange={(e) => setChatTabInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatTabMessage() } }}
+                  placeholder={chatTabWebSearch ? 'Search the web and ask...' : 'Ask anything, or tell me to make a flashcard...'}
+                  style={{ ...S.keyInput, flex: 1, fontSize: 13, padding: '10px 14px' }}
+                  disabled={chatTabLoading}
+                />
+                <button
+                  onClick={sendChatTabMessage}
+                  disabled={chatTabLoading || !chatTabInput.trim()}
+                  style={{ ...S.captureBtn, borderRadius: 6, opacity: chatTabLoading || !chatTabInput.trim() ? 0.5 : 1 }}
+                >
+                  Send
+                </button>
+              </div>
+            </div>
+          </div>
+        </main>
+      )}
+
+      {/* ── Stats Tab ────────────────────────────────────────────────────────── */}
+      {activeTab === 'stats' && (() => {
+        const history = (() => { try { return JSON.parse(localStorage.getItem('screenlens-study-history') || '[]') } catch { return [] } })()
+        const today = new Date().toISOString().split('T')[0]
+        const todayStats = history.filter(h => h.date === today)
+        const todayCards = todayStats.reduce((s, h) => s + (h.cardsStudied || 0), 0)
+        const todayCorrect = todayStats.reduce((s, h) => s + (h.correct || 0), 0)
+        const todayTotal = todayStats.reduce((s, h) => s + (h.totalQuestions || 0), 0)
+
+        // Streak: count consecutive days
+        const dates = [...new Set(history.map(h => h.date))].sort().reverse()
+        let streak = 0
+        const d = new Date()
+        for (let i = 0; i < 365; i++) {
+          const dateStr = d.toISOString().split('T')[0]
+          if (dates.includes(dateStr)) { streak++; d.setDate(d.getDate() - 1) }
+          else if (i === 0) { d.setDate(d.getDate() - 1) } // allow today to not be studied yet
+          else break
+        }
+
+        // Last 14 days chart
+        const chartDays = []
+        for (let i = 13; i >= 0; i--) {
+          const dd = new Date(); dd.setDate(dd.getDate() - i)
+          const ds = dd.toISOString().split('T')[0]
+          const dayH = history.filter(h => h.date === ds)
+          chartDays.push({ date: ds, label: dd.toLocaleDateString('en', { weekday: 'short' }), cards: dayH.reduce((s, h) => s + (h.cardsStudied || 0), 0) })
+        }
+        const maxCards = Math.max(1, ...chartDays.map(d => d.cards))
+
+        // Per-deck breakdown
+        const deckMap = {}
+        history.forEach(h => {
+          if (!deckMap[h.deck]) deckMap[h.deck] = { sessions: 0, cards: 0, lastDate: h.date }
+          deckMap[h.deck].sessions++
+          deckMap[h.deck].cards += h.cardsStudied || 0
+          if (h.date > deckMap[h.deck].lastDate) deckMap[h.deck].lastDate = h.date
+        })
+
+        return (
+        <main style={{ ...S.main, padding: 20 }}>
+          <div style={{ maxWidth: 700, margin: '0 auto', width: '100%' }}>
+            <div style={{ fontSize: 20, fontWeight: 700, color: '#e6edf3', marginBottom: 20 }}>Stats</div>
+
+            {/* Top row: streak + today */}
+            <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
+              <div style={{ flex: 1, padding: '16px 20px', background: '#1c2129', border: '1px solid #2a3040', borderRadius: 8, textAlign: 'center' }}>
+                <div style={{ fontSize: 32, fontWeight: 700, color: '#ffa657' }}>{streak}</div>
+                <div style={{ fontSize: 11, color: '#7d8590' }}>Day Streak</div>
+              </div>
+              <div style={{ flex: 1, padding: '16px 20px', background: '#1c2129', border: '1px solid #2a3040', borderRadius: 8, textAlign: 'center' }}>
+                <div style={{ fontSize: 32, fontWeight: 700, color: '#58a6ff' }}>{todayCards}</div>
+                <div style={{ fontSize: 11, color: '#7d8590' }}>Cards Today</div>
+              </div>
+              <div style={{ flex: 1, padding: '16px 20px', background: '#1c2129', border: '1px solid #2a3040', borderRadius: 8, textAlign: 'center' }}>
+                <div style={{ fontSize: 32, fontWeight: 700, color: '#7ee787' }}>{todayTotal > 0 ? Math.round(todayCorrect / todayTotal * 100) : 0}%</div>
+                <div style={{ fontSize: 11, color: '#7d8590' }}>Accuracy Today</div>
+              </div>
+            </div>
+
+            {/* 14-day chart */}
+            <div style={{ padding: '16px 20px', background: '#1c2129', border: '1px solid #2a3040', borderRadius: 8, marginBottom: 20 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#e6edf3', marginBottom: 12 }}>Last 14 Days</div>
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 100 }}>
+                {chartDays.map((day, i) => (
+                  <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                    <div style={{ fontSize: 9, color: '#7d8590' }}>{day.cards || ''}</div>
+                    <div style={{
+                      width: '100%', borderRadius: 2,
+                      height: Math.max(2, (day.cards / maxCards) * 80),
+                      background: day.date === today ? '#58a6ff' : day.cards > 0 ? 'rgba(88,166,255,.4)' : '#1a1f27',
+                    }} />
+                    <div style={{ fontSize: 8, color: '#484f58' }}>{day.label}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Per-deck breakdown */}
+            <div style={{ padding: '16px 20px', background: '#1c2129', border: '1px solid #2a3040', borderRadius: 8, marginBottom: 20 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#e6edf3', marginBottom: 12 }}>Decks</div>
+              {Object.keys(deckMap).length === 0 && <div style={{ fontSize: 11, color: '#484f58' }}>No study history yet</div>}
+              {Object.entries(deckMap).map(([deck, data]) => (
+                <div key={deck} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid #2a3040', fontSize: 11 }}>
+                  <span style={{ color: '#e6edf3', fontWeight: 600 }}>{deck}</span>
+                  <span style={{ color: '#7d8590' }}>{data.cards} cards / {data.sessions} sessions / last: {data.lastDate}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Recent sessions */}
+            <div style={{ padding: '16px 20px', background: '#1c2129', border: '1px solid #2a3040', borderRadius: 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#e6edf3', marginBottom: 12 }}>Recent Sessions</div>
+              {history.length === 0 && <div style={{ fontSize: 11, color: '#484f58' }}>No sessions yet. Complete a study session to see stats here.</div>}
+              {history.slice(0, 20).map((h, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid #2a3040', fontSize: 11 }}>
+                  <span style={{ color: '#7d8590' }}>{h.date}</span>
+                  <span style={{ color: '#58a6ff' }}>{h.deck}</span>
+                  <span style={{ color: '#e6edf3' }}>{h.cardsStudied} cards</span>
+                  <span style={{ color: h.accuracy >= 80 ? '#7ee787' : h.accuracy >= 50 ? '#d29922' : '#f85149' }}>{h.accuracy}%</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </main>
+        )
+      })()}
+
       {/* ── Study Session ────────────────────────────────────────────────────── */}
-      {studyActive && (
+      {activeTab === 'study' && studyActive && (
         <main style={{ ...S.main, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
           <div style={{ maxWidth: 600, width: '100%', padding: '40px 20px' }}>
 
@@ -2890,92 +3738,188 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                     </div>
                   ))}
                 </div>
+
+                {/* Spaced repetition insights */}
+                {!studyInsights && !studyInsightsLoading && (
+                  <button onClick={generateStudyInsights} style={{ ...S.ghostBtn, fontSize: 11, marginBottom: 16, color: '#d2a8ff', borderColor: 'rgba(210,168,255,.25)' }}>
+                    Generate Insights
+                  </button>
+                )}
+                {studyInsightsLoading && (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginBottom: 16, color: '#7d8590', fontSize: 12 }}>
+                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#d2a8ff', animation: 'pulse 1.5s ease infinite' }} />
+                    Analyzing your session...
+                  </div>
+                )}
+                {studyInsights && (
+                  <div style={{
+                    textAlign: 'left', marginBottom: 16, padding: '12px 16px', borderRadius: 8,
+                    background: 'rgba(210,168,255,.06)', border: '1px solid rgba(210,168,255,.15)',
+                    fontSize: 12, color: '#c9d1d9', lineHeight: 1.6, whiteSpace: 'pre-wrap',
+                  }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: '#d2a8ff', marginBottom: 6 }}>Insights</div>
+                    {studyInsights}
+                  </div>
+                )}
+
                 <button onClick={exitStudy} style={{ ...S.captureBtn, borderRadius: 6 }}>Done</button>
               </div>
             )}
 
-            {/* Interleaved question phase */}
-            {studyPhase === 'question' && studyQueue.length > 0 && (() => {
-              const current = studyQueue[studyQueueIdx]
-              const cs = studyCardState[current.cardIdx]
-              const question = cs.questions[current.questionIdx]
+            {/* Question phase — 10-card continuous system */}
+            {studyPhase === 'question' && (() => {
+              const activeCount = studyCardState.filter(cs => !cs.done).length
+              const completedCount = studyCardState.filter(cs => cs.done).length
+              const cq = currentQuestion
+              const cs = cq ? studyCardState[cq.cardIdx] : null
+              const question = cs ? cs.questions[cq.questionIdx] : null
+
               return (
                 <div>
-                  {/* Header with Anki-style counts */}
+                  {/* Header */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                     <div style={{ display: 'flex', gap: 12, fontSize: 12 }}>
-                      <span style={{ color: '#58a6ff' }}>{studyDeckStats.new_count || 0} <span style={{ fontSize: 10, color: '#7d8590' }}>New</span></span>
-                      <span style={{ color: '#f85149' }}>{studyDeckStats.learn_count || 0} <span style={{ fontSize: 10, color: '#7d8590' }}>Learn</span></span>
-                      <span style={{ color: '#7ee787' }}>{studyDeckStats.review_count || 0} <span style={{ fontSize: 10, color: '#7d8590' }}>Due</span></span>
+                      <span style={{ color: '#58a6ff' }}>{activeCount} <span style={{ fontSize: 10, color: '#7d8590' }}>Active</span></span>
+                      <span style={{ color: '#7ee787' }}>{completedCount} <span style={{ fontSize: 10, color: '#7d8590' }}>Done</span></span>
+                      <span style={{ color: '#7d8590' }}>{studyDeckStats.new_count || 0} New / {studyDeckStats.learn_count || 0} Learn / {studyDeckStats.review_count || 0} Due</span>
                     </div>
                     <button onClick={exitStudy} style={{ ...S.ghostBtn, fontSize: 10 }}>Exit Study</button>
                   </div>
 
-                  {/* Current card front */}
-                  <div style={{
-                    background: '#1c2129', border: '1px solid #2a3040', borderRadius: 8,
-                    padding: '16px 20px', marginBottom: 12, textAlign: 'center',
-                  }}>
-                    <div style={{ fontSize: 16, fontWeight: 700, color: '#e6edf3' }}>{cs.front}</div>
-                  </div>
+                  {/* Current question — card front is HIDDEN */}
+                  {question ? (
+                    <>
+                      <div style={{ fontSize: 13, color: '#e6edf3', fontWeight: 600, marginBottom: 8 }}>
+                        {question}
+                      </div>
 
-                  {/* Question */}
-                  <div style={{ fontSize: 13, color: '#e6edf3', fontWeight: 600, marginBottom: 8 }}>
-                    {question}
-                  </div>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <input
-                      value={studyInput}
-                      onChange={(e) => setStudyInput(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter') submitStudyAnswer() }}
-                      placeholder="Type your answer..."
-                      style={{ ...S.keyInput, flex: 1, fontSize: 13, padding: '10px 14px' }}
-                      disabled={studyLoading}
-                      autoFocus
-                    />
-                    <button
-                      onClick={submitStudyAnswer}
-                      disabled={studyLoading || !studyInput.trim()}
-                      style={{ ...S.captureBtn, borderRadius: 6, opacity: studyLoading || !studyInput.trim() ? 0.5 : 1 }}
-                    >
-                      {studyLoading ? '...' : 'Submit'}
-                    </button>
-                  </div>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <input
+                          value={studyInput}
+                          onChange={(e) => setStudyInput(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') submitStudyAnswer() }}
+                          placeholder="Type your answer..."
+                          style={{ ...S.keyInput, flex: 1, fontSize: 13, padding: '10px 14px' }}
+                          autoFocus
+                        />
+                        <button onClick={submitStudyAnswer} disabled={!studyInput.trim()}
+                          style={{ ...S.captureBtn, borderRadius: 6, opacity: !studyInput.trim() ? 0.5 : 1 }}>
+                          Submit
+                        </button>
+                      </div>
 
-                  {/* Last answer feedback (structured) */}
-                  {studyQueueIdx > 0 && (() => {
-                    const prev = studyQueue[studyQueueIdx - 1]
-                    const prevCs = studyCardState[prev.cardIdx]
-                    const prevQ = prevCs.questions[prev.questionIdx]
-                    const prevA = prevCs.answers[prevCs.answers.length - 1]
-                    const prevResult = prevCs.results[prevCs.results.length - 1]
-                    if (!prevResult) return null
+                      {/* Action buttons */}
+                      <div style={{ display: 'flex', gap: 8, marginTop: 8, justifyContent: 'space-between' }}>
+                        <button onClick={() => setStudyDeleteConfirm(cq.cardIdx)}
+                          style={{ ...S.ghostBtn, fontSize: 10, color: '#7d8590', borderColor: '#2a3040' }}>
+                          I know this already
+                        </button>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          {!studyWrappingUp && (
+                            <button onClick={studyWrapUp} style={{ ...S.ghostBtn, fontSize: 10, color: '#d29922', borderColor: 'rgba(210,153,34,.25)' }}>Wrap Up</button>
+                          )}
+                          <button onClick={studyEndNow} style={{ ...S.ghostBtn, fontSize: 10, color: '#f85149', borderColor: 'rgba(248,81,73,.25)' }}>End Now</button>
+                        </div>
+                      </div>
+
+                      {studyDeleteConfirm === cq.cardIdx && (
+                        <div style={{ padding: '10px 14px', borderRadius: 6, background: 'rgba(248,81,73,.06)', border: '1px solid rgba(248,81,73,.15)', marginTop: 8 }}>
+                          <div style={{ fontSize: 12, color: '#e6edf3', marginBottom: 8 }}>Delete this card from Anki?</div>
+                          <div style={{ display: 'flex', gap: 8 }}>
+                            <button onClick={() => studyDeleteKnownCard(cq.cardIdx)} style={{ ...S.ghostBtn, fontSize: 11, color: '#f85149', borderColor: 'rgba(248,81,73,.3)' }}>Yes, delete</button>
+                            <button onClick={() => setStudyDeleteConfirm(null)} style={{ ...S.ghostBtn, fontSize: 11 }}>Cancel</button>
+                          </div>
+                        </div>
+                      )}
+
+                      {studyWrappingUp && (
+                        <div style={{ fontSize: 10, color: '#d29922', marginTop: 4, textAlign: 'center' }}>Wrapping up — finishing current cards...</div>
+                      )}
+                    </>
+                  ) : (
+                    <div style={{ textAlign: 'center', color: '#7d8590', fontSize: 12, padding: 20 }}>
+                      {studyCardState.some(cs => cs.evaluating) ? 'Evaluating remaining cards...' : 'All cards completed!'}
+                      {!studyCardState.some(cs => cs.evaluating) && (
+                        <button onClick={() => setStudyPhase('summary')} style={{ ...S.captureBtn, borderRadius: 6, marginTop: 12, display: 'block', margin: '12px auto 0' }}>View Summary</button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Completed cards — show feedback inline as they finish */}
+                  {studyCardState.filter(cs => cs.done && cs.results.length > 0 && !cs.dismissed).length > 0 && (
+                    <div style={{ display: 'flex', justifyContent: 'center', marginTop: 16 }}>
+                      <button onClick={async () => {
+                        await syncRatingsToAnki()
+                        setStudyCardState(prev => prev.map(cs => cs.done && cs.results.length > 0 ? { ...cs, dismissed: true } : cs))
+                        setStudySyncNotification(true)
+                        setTimeout(() => setStudySyncNotification(false), 3000)
+                      }} style={{ ...S.ghostBtn, fontSize: 11, color: '#7ee787', borderColor: 'rgba(126,231,135,.3)' }}>
+                        Done — Sync to Anki
+                      </button>
+                    </div>
+                  )}
+                  {studySyncNotification && (
+                    <div style={{ textAlign: 'center', marginTop: 8, fontSize: 11, color: '#7ee787' }}>Synced to Anki</div>
+                  )}
+                  {studyCardState.filter(cs => cs.done && cs.results.length > 0 && !cs.dismissed).map((cs, i) => {
+                    const ci = studyCardState.indexOf(cs)
+                    const ratingColors = { easy: '#7ee787', good: '#58a6ff', hard: '#d29922', again: '#f85149', deleted: '#7d8590' }
                     return (
-                      <div style={{
-                        marginTop: 12, padding: '10px 14px', borderRadius: 6, fontSize: 12,
-                        background: prevResult.correct ? 'rgba(126,231,135,.06)' : 'rgba(248,81,73,.06)',
-                        border: `1px solid ${prevResult.correct ? 'rgba(126,231,135,.15)' : 'rgba(248,81,73,.15)'}`,
-                      }}>
-                        <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 4, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.05em' }}>
-                          {prevResult.correct ? '\u2713' : '\u2717'} {prevCs.front}
+                      <div key={ci} style={{ marginTop: 16, border: '1px solid #2a3040', borderRadius: 8, overflow: 'hidden' }}>
+                        <div style={{ padding: '8px 12px', background: '#1c2129', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: '#e6edf3' }}>{cs.front}</span>
+                          {cs.evaluating ? (
+                            <span style={{ fontSize: 11, color: '#7d8590' }}>Evaluating...</span>
+                          ) : (
+                            <select value={cs.rating || ''} onChange={(e) => {
+                              const newRating = e.target.value
+                              const easeMap = { easy: 4, good: 3, hard: 2, again: 1 }
+                              setStudyCardState(prev => {
+                                const updated = [...prev]
+                                const oldRating = updated[ci].rating
+                                updated[ci] = { ...updated[ci], rating: newRating, ease: easeMap[newRating] || 1 }
+                                setStudyStats(s => ({
+                                  ...s,
+                                  [oldRating]: Math.max(0, (s[oldRating] || 0) - 1),
+                                  [newRating]: (s[newRating] || 0) + 1,
+                                }))
+                                return updated
+                              })
+                            }} style={{ background: '#161b22', color: ratingColors[cs.rating] || '#7d8590', border: `1px solid ${ratingColors[cs.rating] || '#2a3040'}44`, borderRadius: 4, fontSize: 11, fontWeight: 700, fontFamily: 'inherit', padding: '2px 6px', cursor: 'pointer' }}>
+                              <option value="easy" style={{ color: '#7ee787' }}>EASY</option>
+                              <option value="good" style={{ color: '#58a6ff' }}>GOOD</option>
+                              <option value="hard" style={{ color: '#d29922' }}>HARD</option>
+                              <option value="again" style={{ color: '#f85149' }}>AGAIN</option>
+                            </select>
+                          )}
                         </div>
-                        <div style={{ color: '#7d8590', marginBottom: 4 }}>
-                          <span style={{ fontWeight: 600 }}>Q:</span> {prevQ}
-                        </div>
-                        <div style={{ color: '#c9d1d9', marginBottom: 6 }}>
-                          <span style={{ fontWeight: 600 }}>Your answer:</span> {prevA}
-                        </div>
-                        <div style={{ color: prevResult.correct ? '#7ee787' : '#ffa657', lineHeight: 1.5 }}>
-                          {prevResult.feedback}
-                        </div>
-                        {prevResult.grammarNote && (
-                          <div style={{ color: '#d2a8ff', fontSize: 11, marginTop: 4, fontStyle: 'italic' }}>
-                            {prevResult.grammarRelevant ? '\u26A0\uFE0F' : '\u{1F4A1}'} Grammar: {prevResult.grammarNote}
+                        {cs.results.map((r, qi) => (
+                          <div key={qi} style={{ padding: '8px 12px', borderTop: '1px solid #2a3040', fontSize: 12, background: r.correct ? 'rgba(126,231,135,.03)' : 'rgba(248,81,73,.03)' }}>
+                            <div style={{ color: r.correct ? '#7ee787' : '#f85149', fontSize: 10, fontWeight: 700, marginBottom: 4 }}>
+                              {r.correct ? '\u2713 CORRECT' : '\u2717 INCORRECT'}
+                            </div>
+                            <div style={{ color: '#7d8590', marginBottom: 3 }}><span style={{ fontWeight: 600 }}>Q:</span> {cs.questions[qi]}</div>
+                            <div style={{ color: '#c9d1d9', marginBottom: 4 }}><span style={{ fontWeight: 600 }}>Your answer:</span> {cs.answers[qi]}</div>
+                            <div style={{ color: r.correct ? '#7ee787' : '#ffa657', lineHeight: 1.5, fontSize: 11 }}>{r.feedback}</div>
+                          </div>
+                        ))}
+                        <div style={{ padding: '4px 12px', borderTop: '1px solid #2a3040', fontSize: 10, color: '#484f58' }}>{cs.back}</div>
+                        {/* Feedback chat */}
+                        {!cs.evaluating && (
+                          <div style={{ padding: '6px 12px', borderTop: '1px solid #2a3040' }}>
+                            {(studyFeedbackChat[ci]?.messages || []).map((m, mi) => (
+                              <div key={mi} style={{ fontSize: 11, padding: '4px 8px', marginBottom: 4, borderRadius: 4, background: m.role === 'user' ? 'rgba(88,166,255,.08)' : 'rgba(126,231,135,.05)', color: m.role === 'user' ? '#c9d1d9' : '#7ee787' }}>{m.text}</div>
+                            ))}
+                            {studyFeedbackChat[ci]?.loading && <div style={{ fontSize: 10, color: '#7d8590', padding: '2px 8px' }}>Thinking...</div>}
+                            <div style={{ display: 'flex', gap: 4 }}>
+                              <input value={studyFeedbackChat[ci]?.input || ''} onChange={(e) => setStudyFeedbackChat(prev => ({ ...prev, [ci]: { ...(prev[ci] || { messages: [], loading: false }), input: e.target.value } }))} onKeyDown={(e) => { if (e.key === 'Enter') sendStudyFeedbackChat(ci) }} placeholder="Fix typo, flag bad question, or ask..." style={{ ...S.keyInput, flex: 1, fontSize: 10, padding: '4px 8px' }} />
+                              <button onClick={() => sendStudyFeedbackChat(ci)} disabled={studyFeedbackChat[ci]?.loading || !(studyFeedbackChat[ci]?.input?.trim())} style={{ ...S.ghostBtn, fontSize: 9, padding: '4px 8px', opacity: (studyFeedbackChat[ci]?.loading || !(studyFeedbackChat[ci]?.input?.trim())) ? 0.4 : 1 }}>Ask</button>
+                            </div>
                           </div>
                         )}
                       </div>
                     )
-                  })()}
+                  })}
                 </div>
               )
             })()}
@@ -2985,7 +3929,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
               <div>
                 <div style={{ fontSize: 16, fontWeight: 700, color: '#e6edf3', marginBottom: 16 }}>Batch Results</div>
                 {studyCardState.map((cs, ci) => {
-                  const ratingColors = { easy: '#7ee787', good: '#58a6ff', hard: '#d29922', again: '#f85149' }
+                  const ratingColors = { easy: '#7ee787', good: '#58a6ff', hard: '#d29922', again: '#f85149', deleted: '#7d8590' }
                   return (
                     <div key={ci} style={{ marginBottom: 16, border: '1px solid #2a3040', borderRadius: 8, overflow: 'hidden' }}>
                       <div style={{
@@ -3024,6 +3968,35 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                       <div style={{ padding: '4px 12px', borderTop: '1px solid #2a3040', fontSize: 10, color: '#484f58' }}>
                         {cs.back}
                       </div>
+                      {/* Feedback chat — ask follow-up questions about this card */}
+                      <div style={{ padding: '6px 12px', borderTop: '1px solid #2a3040' }}>
+                        {(studyFeedbackChat[ci]?.messages || []).map((m, mi) => (
+                          <div key={mi} style={{
+                            fontSize: 11, padding: '4px 8px', marginBottom: 4, borderRadius: 4,
+                            background: m.role === 'user' ? 'rgba(88,166,255,.08)' : 'rgba(126,231,135,.05)',
+                            color: m.role === 'user' ? '#c9d1d9' : '#7ee787',
+                          }}>
+                            {m.text}
+                          </div>
+                        ))}
+                        {studyFeedbackChat[ci]?.loading && (
+                          <div style={{ fontSize: 10, color: '#7d8590', padding: '2px 8px' }}>Thinking...</div>
+                        )}
+                        <div style={{ display: 'flex', gap: 4 }}>
+                          <input
+                            value={studyFeedbackChat[ci]?.input || ''}
+                            onChange={(e) => setStudyFeedbackChat(prev => ({ ...prev, [ci]: { ...(prev[ci] || { messages: [], loading: false }), input: e.target.value } }))}
+                            onKeyDown={(e) => { if (e.key === 'Enter') sendStudyFeedbackChat(ci) }}
+                            placeholder="Fix typo, flag bad question, or ask..."
+                            style={{ ...S.keyInput, flex: 1, fontSize: 10, padding: '4px 8px' }}
+                          />
+                          <button onClick={() => sendStudyFeedbackChat(ci)}
+                            disabled={studyFeedbackChat[ci]?.loading || !(studyFeedbackChat[ci]?.input?.trim())}
+                            style={{ ...S.ghostBtn, fontSize: 9, padding: '4px 8px', opacity: (studyFeedbackChat[ci]?.loading || !(studyFeedbackChat[ci]?.input?.trim())) ? 0.4 : 1 }}>
+                            Ask
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   )
                 })}
@@ -3039,7 +4012,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
       )}
 
       {/* ── Main Content ─────────────────────────────────────────────────────── */}
-      {!studyActive && !deckBrowserActive && <main style={isOverlay ? { ...S.main, padding: 0, background: 'transparent' } : S.main}>
+      {(activeTab === 'picture' || isOverlay) && <main style={isOverlay ? { ...S.main, padding: 0, background: 'transparent' } : S.main}>
         {/* Empty state (hidden in overlay) */}
         {stage === 'idle' && !isOverlay && (
           <div style={S.emptyState}>
@@ -3245,6 +4218,54 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
           <div style={S.expandedWrap} onClick={(e) => e.stopPropagation()}>
             <img src={screenshot} alt="Expanded" style={S.expandedImg} />
             <div style={S.overlayLayer}>{renderWordOverlays()}</div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Chat Side Panel (split-screen) ──────────────────────────────────── */}
+      {false && (
+        <div style={{ position: 'fixed', right: 0, top: 0, bottom: 0, width: 380, background: '#0e1117', borderLeft: '1px solid #2a3040', zIndex: 9000, display: 'flex', flexDirection: 'column' }}>
+          <div style={{ padding: '8px 12px', borderBottom: '1px solid #2a3040', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: '#e6edf3' }}>Chat</span>
+            <button onClick={() => setChatSidePanel(false)} style={{ ...S.ghostBtn, fontSize: 10, padding: '2px 8px' }}>&times;</button>
+          </div>
+          {chatTabAttachedDeck && (
+            <div style={{ padding: '4px 12px', borderBottom: '1px solid #2a3040', fontSize: 10, color: '#58a6ff', display: 'flex', alignItems: 'center', gap: 4 }}>
+              Attached: {chatTabAttachedDeck.name} ({chatTabAttachedDeck.cards.length} cards)
+              <span onClick={() => setChatTabAttachedDeck(null)} style={{ cursor: 'pointer', color: '#7d8590' }}>&times;</span>
+            </div>
+          )}
+          <div ref={chatTabScrollRef} style={{ flex: 1, overflow: 'auto', padding: '12px' }}>
+            {chatTabMsgs.length === 0 && <div style={{ textAlign: 'center', color: '#484f58', fontSize: 11, padding: 20 }}>Start a conversation...</div>}
+            {chatTabMsgs.map((m, i) => (
+              <div key={i} style={{ marginBottom: 8, display: 'flex', flexDirection: 'column', alignItems: m.role === 'user' ? 'flex-end' : 'flex-start' }}>
+                <div style={{ maxWidth: '90%', padding: '8px 12px', borderRadius: 8, fontSize: 12, lineHeight: 1.4, background: m.role === 'user' ? 'rgba(88,166,255,.12)' : '#1c2129', border: `1px solid ${m.role === 'user' ? 'rgba(88,166,255,.2)' : '#2a3040'}`, color: '#e6edf3', whiteSpace: 'pre-wrap' }}>
+                  {m.content}
+                </div>
+                {m.cards?.map((card, ci) => (
+                  <div key={ci} style={{ maxWidth: '90%', marginTop: 4, padding: '8px 10px', borderRadius: 6, background: '#161b22', border: '1px solid #2a3040', fontSize: 11 }}>
+                    <div style={{ fontWeight: 600, color: '#e6edf3', marginBottom: 2 }}>{card.front}</div>
+                    <div style={{ color: '#c9d1d9', whiteSpace: 'pre-line', marginBottom: 4 }}>{card.back}</div>
+                    {card.synced ? <span style={{ fontSize: 9, color: '#7ee787' }}>Synced</span> : (
+                      <button onClick={() => chatTabSyncCard(card, i)} style={{ ...S.ghostBtn, fontSize: 9, padding: '2px 8px', color: '#7ee787', borderColor: 'rgba(126,231,135,.3)' }}>Sync to Anki</button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ))}
+            {chatTabLoading && <div style={{ fontSize: 11, color: '#7d8590', padding: '4px 0' }}>Thinking...</div>}
+          </div>
+          <div style={{ padding: '8px 12px', borderTop: '1px solid #2a3040' }}>
+            {!chatTabAttachedDeck && ankiConnected && (
+              <select value="" onChange={(e) => { if (e.target.value) chatTabAttachDeck(e.target.value) }} style={{ ...S.select, fontSize: 9, padding: '2px 4px', marginBottom: 4, width: '100%' }}>
+                <option value="">Attach deck...</option>
+                {ankiDecks.map(d => <option key={d} value={d}>{d}</option>)}
+              </select>
+            )}
+            <div style={{ display: 'flex', gap: 4 }}>
+              <input value={chatTabInput} onChange={(e) => setChatTabInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatTabMessage() } }} placeholder="Ask anything..." style={{ ...S.keyInput, flex: 1, fontSize: 11, padding: '8px 10px' }} disabled={chatTabLoading} />
+              <button onClick={sendChatTabMessage} disabled={chatTabLoading || !chatTabInput.trim()} style={{ ...S.captureBtn, borderRadius: 4, fontSize: 10, opacity: chatTabLoading || !chatTabInput.trim() ? 0.5 : 1 }}>Send</button>
+            </div>
           </div>
         </div>
       )}
@@ -3619,7 +4640,28 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
       `}</style>
 
       {/* Floating AI Help Button */}
-      {!isOverlay && <HelpChat apiKey={apiKey} />}
+      {!isOverlay && <HelpChat apiKey={apiKey} appContext={{
+        activeTab,
+        activeMode: { name: activeMode.name, type: activeMode.type, ankiDeck: activeMode.ankiDeck },
+        ocrWords: ocrWords.map(w => ({ text: w.text, translation: w.translation })),
+        activeWord: activeWord ? { text: activeWord.text, translation: activeWord.translation, pronunciation: activeWord.pronunciation, definition: activeWord.definition, synonyms: activeWord.synonyms, example: activeWord.example } : null,
+        explanation,
+        deepExplanation,
+        ankiConnected,
+        ankiDecks,
+        ankiCard,
+        studyActive,
+        studyDeck,
+        studyPhase,
+        studyStats,
+        studyDeckStats,
+        currentQuestion: studyActive && studyQueue[studyQueueIdx] ? { question: studyQueue[studyQueueIdx].question, cardFront: studyCardState[studyQueue[studyQueueIdx].cardIdx]?.front } : null,
+        chatTabMsgs: chatTabMsgs.slice(-5).map(m => ({ role: m.role, content: m.content?.slice(0, 200) })),
+        language,
+        targetLang,
+        screenshot: !!screenshot,
+        stage,
+      }} />}
     </div>
   )
 }

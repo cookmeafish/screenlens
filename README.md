@@ -1,37 +1,70 @@
-# ScreenLens — AI-Powered Learning & Screen Translation
+# ScreenLens — AI-Powered Learning & Study Platform
 
-A local learning app that captures your display, OCRs every word with pixel-precise positioning, translates foreign text via your choice of AI provider, and integrates with Anki for spaced repetition study. Supports multiple learning modes — from language learning to CompTIA certifications and beyond.
+A multi-tab learning app with AI chat, Anki-integrated study sessions, screen translation, and progress tracking. Supports multiple learning modes — from language learning to CompTIA certifications and beyond.
 
 ## Features
 
-- **Screen capture** — `Ctrl+Shift+S` to screenshot any window/display
-- **Paste / Upload / Drag-drop** — Alternative image input methods
-- **Cancel anytime** — Press ESC or click Cancel to stop OCR/translation mid-process
-- **Dual-pass OCR** — Runs Tesseract on both preprocessed and original images, merging results for maximum word detection on complex backgrounds (game art, textured UIs)
-- **Tight word boxes** — Bounding boxes fit snugly around detected words, no bloat
-- **Pixel-accurate overlays** — Hover any word for translation, pronunciation, synonyms, and part of speech
+### Tabs
+- **Chat** — AI conversational assistant for learning, with inline Anki card generation, deck attachment for personalized tutoring, and conversation history
+- **Study** — Anki study sessions with AI-generated questions, deck browser, typo correction, feedback chat, "I know this" card deletion, wrap up/end now controls, and spaced repetition insights
+- **Picture** — Screen capture/OCR/translation with pixel-accurate word overlays, overlay mode for games
+- **Stats** — Study streaks, accuracy trends, per-deck breakdown (coming soon)
+
+### Core Features
+- **Multi-provider AI** — Claude, GPT, Gemini, and Grok with unified provider settings panel
 - **Learning modes** — Create AI-configured modes for any subject (languages, Security+, Organic Chemistry, etc.)
-- **Anki integration** — Generate AI-powered flashcards with proper HTML formatting (bold labels, line breaks), sync to Anki and AnkiWeb
-- **Study sessions** — Multi-card interleaved quizzes with AI-generated questions, evaluation, grammar feedback, and Anki spaced repetition rating
-- **Deck browser** — View, edit, search, and delete Anki flashcards directly in the app
-- **Knowledge base** — Upload .txt/.md reference materials per mode for smarter AI questions
-- **Grammar feedback** — Optional grammar/spelling correction in any quiz language
-- **Overlay mode** — Fullscreen overlay on top of games/apps via Electron (optional)
-- **AI Help Assistant** — Draggable floating ? button with built-in AI chat that knows the entire app
-- **Multi-provider AI** — Claude, GPT, Gemini, and Grok
+- **Anki integration** — Generate flashcards, sync to Anki, study with AI quizzes, browse/edit decks
+- **Knowledge base** — Upload .txt/.md reference materials per mode for smarter AI context
+- **Progress tracking** — Per-deck progress observations saved to disk, AI tracks struggles and improvements across sessions
 - **18 languages** — Spanish, French, German, Japanese, Korean, Chinese, Russian, Arabic, etc.
+
+### Chat Tab
+- Full AI chatbot for explaining concepts and answering questions
+- Ask the AI to create Anki flashcards inline — cards appear with preview, edit, and sync controls
+- Attach an Anki deck for personalized tutoring — AI reads all cards + progress observations to focus on weak areas
+- Conversation history saved to localStorage with session management sidebar
+- AI can auto-update progress observations when it discovers new struggles or improvements
+
+### Study Tab
+- **10-card continuous system** — 10 cards active at once, questions randomly selected (~10% chance per card). When a card completes, a new one is pulled from the pool automatically
+- **Card front hidden** — questions don't reveal which card they belong to, preventing answer leakage
+- **Zero-delay answers** — answers recorded instantly with no AI call. Next question appears immediately
+- **Batch evaluation** — AI evaluates all 3 answers for a card at once in the background, only after the last question is answered
+- **Inline feedback** — completed card feedback appears below the active question as evaluations finish, so you can review while continuing to answer other cards
+- **Smart evaluation** — for language learning, typos in the response language (e.g. English typos when studying Spanish) don't count against you
+- **Feedback chat** — after feedback is revealed, chat with AI to fix typos ("I meant claro not claor"), flag out-of-scope questions, or request card updates
+- **Card updates from feedback** — AI can update Anki card content to add clarity (e.g. specify "pointer" means pointing device, not computing)
+- **Ratings synced after review** — Anki ratings only sync when you finish, giving you time to dispute/correct first
+- **"I know this already"** — delete cards you've mastered with AI confirmation
+- **Wrap Up** — finish current cards without loading new ones
+- **End Now** — immediately end session with partial results
+- **Spaced repetition insights** — AI analyzes session results and updates `decks/<deck>/progress-observations.md` with struggles, improvements, and mastered topics
+- **Multiple choice support** — AI can generate multiple choice questions when it makes sense, but prefers text-based answers
+
+### Picture Tab
+- **Screen capture** — `Ctrl+Shift+S` for full screen, `Ctrl+Shift+A` for area selection
+- **Area selection** — transparent drawing window, screen not frozen during selection, only selected area captured
+- **Paste / Upload / Drag-drop** — Alternative image input methods
+- **Dual-pass OCR** — Tesseract on preprocessed + original images for maximum detection
+- **Pixel-accurate overlays** — Hover any word for translation, pronunciation, synonyms, part of speech
+- **Anki card generation** — Click a word, generate a card, edit/refine with AI, sync to Anki
+- **Draggable tooltip** — Pinned word tooltip can be dragged anywhere, position saved across sessions
+- **Overlay mode** — Fullscreen overlay on top of games/apps via Electron
 
 ## Architecture
 
 ```
 screenlens/
-  src/                 ← React web app
+  src/                 ← React web app (single App.jsx with tab routing)
   electron/            ← Optional Electron overlay companion
-    main.cjs           ← Electron main process
+    main.cjs           ← Electron main process (overlay + area select)
     preload.cjs        ← IPC bridge
   modes/
     Default/           ← Default mode template (committed to git)
     <your modes>/      ← Your custom modes (gitignored)
+  decks/               ← Per-deck progress tracking (auto-created)
+    <deck-name>/
+      progress-observations.md  ← AI-maintained struggle/improvement log
   vite.config.js       ← Dev server + API endpoints
 ```
 
@@ -54,11 +87,10 @@ Opens at `http://localhost:3000`.
 
 ## Configuration
 
-1. Select your AI provider from the dropdown (Anthropic, OpenAI, Gemini, or Grok)
-2. Click **Key Set** and enter your API key
-3. Select source and target languages (translation settings are separate from study quiz language)
-4. Capture or upload a screenshot
-5. Press **ESC** at any time to cancel an in-progress OCR/translation
+1. Click the **AI provider button** in the toolbar (e.g. "Anthropic (Claude)")
+2. Select your provider and enter your API key in the settings panel
+3. Click the **gear icon** to configure language settings, Anki, and knowledge base
+4. Navigate between tabs: **Chat** for AI conversation, **Study** for Anki quizzes, **Picture** for screen translation
 
 ## Supported AI Providers
 
@@ -137,25 +169,32 @@ Card format is AI-generated per mode and fully customizable via the Card Format 
 
 ### Study sessions
 
-1. Click **Study** in the toolbar
-2. Select mode, deck, quiz language, and grammar feedback toggle
-3. Click **Study Now** — AI generates questions from your Anki cards
-4. Answer questions — AI evaluates each answer and rates the card
-5. Ratings (Easy/Good/Hard/Again) sync back to Anki's spaced repetition system and AnkiWeb
+1. Go to the **Study** tab and click **Study Now**
+2. Select mode, deck, quiz language — 10 cards load with AI-generated questions
+3. Answer questions — responses are instant, no waiting. Card names are hidden to prevent answer leakage
+4. As each card's 3 questions are answered, AI evaluates in the background and feedback appears inline
+5. Review feedback while continuing to answer other cards. Use the feedback chat to fix typos, dispute answers, or clarify cards
+6. New cards are pulled automatically as you complete them, keeping 10 active
+7. When done, click **View Summary** → **Generate Insights** for AI analysis + progress tracking
+8. Ratings sync to Anki only when you finish, after you've had a chance to review and correct
 
 Study features:
-- **Interleaved questions** — multiple cards at once (default 3), questions shuffled randomly across cards to prevent answer leakage
-- **Quiz language** — study in any language (questions and answers generated in that language)
-- **Grammar feedback** — optional toggle for grammar/spelling correction (doesn't affect rating unless the grammar error is directly related to what the card tests)
-- **Knowledge base context** — AI uses your uploaded reference materials for more targeted questions
-- **Live Anki stats** — shows New/Learn/Due counts pulled live from Anki, updating after each card
+- **10-card pool** — questions randomly selected across 10 active cards for natural spacing
+- **Hidden card fronts** — prevents answer leakage (e.g. seeing "Ayuntamiento" when the question asks for it)
+- **Smart language evaluation** — English typos don't penalize you when studying Spanish
+- **Feedback chat** — dispute answers, fix typos, flag out-of-scope questions, update Anki cards
+- **Wrap Up / End Now** — graceful or immediate session ending
+- **"I know this"** — delete mastered cards with confirmation
+- **Progress observations** — AI maintains `decks/<deck>/progress-observations.md` tracking struggles, improvements, and mastery
+- **Knowledge base context** — AI uses your uploaded reference materials for targeted questions
+- **Multiple choice** — AI can generate multiple choice when appropriate, prefers text answers
 
 ### Deck browser
 
-Click **Deck** in the toolbar to:
+Go to the **Study** tab and click **Browse Deck** to:
 - View all flashcards in any deck
 - Search cards by content
-- Edit card fields inline (HTML converted to plain text for editing)
+- Edit card fields inline with AI refine input
 - Delete cards with confirmation
 - Changes auto-sync to AnkiWeb
 
@@ -184,15 +223,13 @@ npm install electron --save-optional
 ### Usage
 
 1. Start the web app: `npm run dev`
-2. Click the **Overlay** button in the toolbar (or run `npm run overlay` in a separate terminal)
-3. The Overlay button turns green when active
-4. Switch to your game or app
-5. Press **Ctrl+Shift+S** — screen is captured and the overlay appears fullscreen with the frozen screenshot
-6. OCR + translation runs in the background — word boxes appear seamlessly on the frozen screenshot
-7. Hover words for translations, click to pin, all features available
-8. Press **ESC** to dismiss the overlay and return to your game
-9. Press **Ctrl+Shift+S** again anytime for a new capture
-10. Click the green Overlay button to stop Electron
+2. Go to the **Picture** tab and click **Overlay** (or run `npm run overlay`)
+3. Switch to your game or app
+4. **Ctrl+Shift+S** — full screen capture, overlay appears with frozen screenshot
+5. **Ctrl+Shift+A** — area selection: transparent drawing window appears, draw a rectangle, only that area is captured and frozen while the rest of the desktop stays interactive
+6. Hover words for translations, click to pin, all features available
+7. Press **ESC** to dismiss the overlay
+8. Click the green Overlay button to stop Electron
 
 ### How it works
 

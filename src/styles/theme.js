@@ -12,6 +12,15 @@ export const S = {
     background: '#161b22', flexWrap: 'wrap', gap: 8,
   },
   headerLeft: { display: 'flex', alignItems: 'center', gap: 10 },
+  tabBar: { display: 'flex', gap: 2, marginLeft: 16, background: '#0e1117', borderRadius: 6, padding: 2 },
+  tab: {
+    padding: '5px 14px', borderRadius: 4, fontSize: 11, fontWeight: 600,
+    cursor: 'pointer', border: 'none', fontFamily: 'inherit',
+    background: 'transparent', color: '#7d8590', transition: 'all 0.15s ease',
+  },
+  tabActive: {
+    background: '#1c2129', color: '#e6edf3', boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+  },
   title: { fontSize: 16, fontWeight: 700, margin: 0 },
   badge: {
     fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.1em',

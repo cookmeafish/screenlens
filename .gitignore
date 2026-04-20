@@ -8,5 +8,8 @@ modes/*
 !modes/Default/
 modes/_meta.json
 logs/
+decks/
+chats/
 electron/last-capture.png
 .claude/
+planned-features.md
