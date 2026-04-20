@@ -27,17 +27,22 @@ A multi-tab learning app with AI chat, Anki-integrated study sessions, screen tr
 - AI can auto-update progress observations when it discovers new struggles or improvements
 
 ### Study Tab
-- **10-card continuous system** — 10 cards active at once, questions randomly selected (~10% chance per card). When a card completes, a new one is pulled from the pool automatically
+- **Instant start** — first card appears immediately (one AI call), remaining cards generate in the background while you answer
+- **Smart question ordering** — Q1 is always blind recall (never names the target word), middle questions use guided recall/synonym contrast, last question is deep understanding (can name the subject). Scales to any questions-per-card setting
+- **Hint system** — wrong answer on a recall question shows a letter-count hint ("9 letters"); wrong again shows a first-letter hint ("starts with 'i'"). Button changes to "Try Again". Applies to any question type with multiple possible answers
+- **Back button** — undo your last answer and retry the question, as long as that card hasn't been synced to Anki yet
+- **10-card continuous system** — 10 cards active at once, questions randomly interleaved. When a card completes, a new one is pulled from the pool automatically
 - **Card front hidden** — questions don't reveal which card they belong to, preventing answer leakage
 - **Zero-delay answers** — answers recorded instantly with no AI call. Next question appears immediately
-- **Batch evaluation** — AI evaluates all 3 answers for a card at once in the background, only after the last question is answered
+- **Batch evaluation** — AI evaluates all answers for a card at once in the background, only after the last question is answered
 - **Inline feedback** — completed card feedback appears below the active question as evaluations finish, so you can review while continuing to answer other cards
+- **Previous attempts shown** — results view shows all retry attempts grayed out above the final answer
 - **Smart evaluation** — for language learning, typos in the response language (e.g. English typos when studying Spanish) don't count against you
-- **Feedback chat** — after feedback is revealed, chat with AI to fix typos ("I meant claro not claor"), flag out-of-scope questions, or request card updates
-- **Card updates from feedback** — AI can update Anki card content to add clarity (e.g. specify "pointer" means pointing device, not computing)
+- **Feedback chat** — after feedback is revealed, chat with AI to fix typos, flag out-of-scope questions, or request card updates. AI trusts student corrections and never argues
+- **Card updates from feedback** — AI can update Anki card content to add clarity
 - **Ratings synced after review** — Anki ratings only sync when you finish, giving you time to dispute/correct first
 - **"I know this already"** — delete cards you've mastered with AI confirmation
-- **Wrap Up** — finish current cards without loading new ones
+- **Smart Wrap Up** — immediately drops all unstarted cards (0 answers), finishes only in-progress ones. Session ends as fast as possible without abandoning cards you already started
 - **End Now** — immediately end session with partial results
 - **Spaced repetition insights** — AI analyzes session results and updates `decks/<deck>/progress-observations.md` with struggles, improvements, and mastered topics
 - **Multiple choice support** — AI can generate multiple choice questions when it makes sense, but prefers text-based answers
@@ -172,20 +177,26 @@ Card format is AI-generated per mode and fully customizable via the Card Format 
 ### Study sessions
 
 1. Go to the **Study** tab and click **Study Now**
-2. Select mode, deck, quiz language — 10 cards load with AI-generated questions
-3. Answer questions — responses are instant, no waiting. Card names are hidden to prevent answer leakage
-4. As each card's 3 questions are answered, AI evaluates in the background and feedback appears inline
-5. Review feedback while continuing to answer other cards. Use the feedback chat to fix typos, dispute answers, or clarify cards
-6. New cards are pulled automatically as you complete them, keeping 10 active
-7. When done, click **View Summary** → **Generate Insights** for AI analysis + progress tracking
-8. Ratings sync to Anki only when you finish, after you've had a chance to review and correct
+2. Select mode, deck, quiz language — the first card appears immediately, rest generate in background
+3. Answer questions — Q1 is always blind recall (no target word in question). Wrong answers trigger progressive hints
+4. Use **← Back** to undo your last answer and retry (available until the card syncs to Anki)
+5. As each card completes, AI evaluates in the background and feedback appears inline
+6. Review feedback while continuing to answer other cards. Use the feedback chat to fix typos, dispute answers, or clarify cards
+7. New cards are pulled automatically as you complete them, keeping 10 active
+8. When done, click **View Summary** → **Generate Insights** for AI analysis + progress tracking
+9. Ratings sync to Anki only when you finish, after you've had a chance to review and correct
 
 Study features:
-- **10-card pool** — questions randomly selected across 10 active cards for natural spacing
-- **Hidden card fronts** — prevents answer leakage (e.g. seeing "Ayuntamiento" when the question asks for it)
+- **Instant start** — only one AI call before the first question appears; rest load in background
+- **Ordered questions** — blind recall first, deep explanation last, guided recall in between
+- **Progressive hints** — letter count hint, then first-letter hint, then "Try Again"
+- **Back / undo** — undo last answer on any unsynced card
+- **10-card pool** — questions randomly interleaved across 10 active cards for natural spacing
+- **Hidden card fronts** — prevents answer leakage
 - **Smart language evaluation** — English typos don't penalize you when studying Spanish
 - **Feedback chat** — dispute answers, fix typos, flag out-of-scope questions, update Anki cards
-- **Wrap Up / End Now** — graceful or immediate session ending
+- **Smart Wrap Up** — drops unstarted cards immediately, finishes only what you've started
+- **End Now** — immediate session end with partial results
 - **"I know this"** — delete mastered cards with confirmation
 - **Progress observations** — AI maintains `decks/<deck>/progress-observations.md` tracking struggles, improvements, and mastery
 - **Knowledge base context** — AI uses your uploaded reference materials for targeted questions
@@ -196,8 +207,10 @@ Study features:
 Go to the **Study** tab and click **Browse Deck** to:
 - View all flashcards in any deck
 - Search cards by content
-- Edit card fields inline with AI refine input
+- Edit card fields inline with AI refine input ("Say football instead of soccer")
 - Delete cards with confirmation
+- Save button shows live status (Saving → Saved / Save failed — is Anki open?)
+- Closing the browser syncs any edits back into your active study session immediately — no tab refresh needed
 - Changes auto-sync to AnkiWeb
 
 ## Knowledge Base

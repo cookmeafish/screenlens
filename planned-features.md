@@ -39,6 +39,14 @@
 - Knowledge base context for smarter questions
 - Quiz language selector (study in any language)
 - Deleted card protection
+- Streaming start: first card shown immediately, rest generated in background
+- Smart question ordering: blind recall → guided recall → deep explanation (scales to any questionsPerCard)
+- Progressive hint system: wrong answer → letter count hint → first letter hint → Try Again
+- Undo last answer (Back button) while card is unsynced
+- Smart Wrap Up: drops unstarted cards immediately, only finishes in-progress ones
+- Feedback chat trusts student corrections; mark_all_correct action for bulk typo fixes
+- Deck browser edits sync back to active study session on close (no refresh needed)
+- Browse cards save status feedback (Saving/Saved/error)
 
 ### Knowledge Base ✅
 - Per-mode knowledge/ folder
@@ -90,6 +98,7 @@
 - Spaced repetition scheduling within the app (without Anki)
 - Study session history and statistics
 - Progress tracking per mode
+- Per-question immediate feedback mode (evaluate each answer as it's submitted rather than batch at card end)
 
 ### General
 - Export translations as CSV/JSON
