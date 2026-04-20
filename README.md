@@ -22,7 +22,7 @@ A multi-tab learning app with AI chat, Anki-integrated study sessions, screen tr
 - Full AI chatbot for explaining concepts and answering questions
 - Ask the AI to create Anki flashcards inline — cards appear with preview, edit, and sync controls
 - Attach an Anki deck for personalized tutoring — AI reads all cards + progress observations to focus on weak areas
-- **Web search** — toggle the globe button to search the internet before AI responds, with source citations
+- **Web search** — toggle the globe button to search the internet before AI responds, with clickable source citations and live status indicators (searching, found results, analyzing, etc.)
 - Conversation history persisted to disk (`chats/` directory) with session management sidebar
 - AI can auto-update progress observations when it discovers new struggles or improvements
 
