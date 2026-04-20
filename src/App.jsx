@@ -2256,17 +2256,19 @@ IMPORTANT BEHAVIOR RULES:
 4. NEVER dump a wall of cards without asking first. Quality over quantity.`
 
       // Web search if enabled
+      let searchSources = null
       if (chatTabWebSearch) {
         setChatTabStatus('searching')
-        systemPrompt += '\n\n5. You have WEB SEARCH capability. Search results from the internet are provided below. You MUST use them to answer the user\'s question. Do NOT say you cannot search the internet — the search has already been performed for you.'
+        systemPrompt += '\n\n5. You have WEB SEARCH capability. Search results from the internet are provided below. You MUST use them to answer the user\'s question. Do NOT say you cannot search the internet — the search has already been performed for you. You MUST cite your sources inline using [Source Title](URL) format for every claim based on search results.'
         try {
           const searchRes = await fetch(`/api/web-search?q=${encodeURIComponent(q)}`)
           const searchData = await searchRes.json()
           if (searchData.results?.length > 0) {
+            searchSources = searchData.results
             setChatTabStatus('search-done')
             systemPrompt += `\n\nWEB SEARCH RESULTS for "${q}":\n` +
               searchData.results.map((r, i) => `${i + 1}. ${r.title}\n   URL: ${r.url}\n   ${r.snippet}`).join('\n\n') +
-              '\n\nBase your answer on these search results. Cite the source URLs when referencing specific information.'
+              '\n\nBase your answer on these search results. You MUST cite source URLs inline. At the end of your response, list all sources you used in this format:\n<sources>\nTitle | URL\nTitle | URL\n</sources>'
           } else {
             setChatTabStatus('search-empty')
             systemPrompt += '\n\nWeb search returned no results. Answer from your own knowledge but mention the search found nothing.'
@@ -2309,8 +2311,20 @@ Focus on their weak areas. If you discover new struggles or notice improvement, 
         }
       }
 
-      const cleanText = text.replace(/<anki-card>.*?<\/anki-card>/gs, '').replace(/<progress-update>[\s\S]*?<\/progress-update>/g, '').trim()
-      const assistantMsg = { role: 'assistant', content: cleanText, cards: parsedCards.length > 0 ? parsedCards : undefined }
+      // Parse sources from response
+      const sourcesMatch = text.match(/<sources>([\s\S]*?)<\/sources>/)
+      let sources = searchSources // fallback to raw search results
+      if (sourcesMatch) {
+        const cited = sourcesMatch[1].trim().split('\n').map(line => {
+          const parts = line.split('|').map(s => s.trim())
+          if (parts.length >= 2) return { title: parts[0], url: parts[1] }
+          return null
+        }).filter(Boolean)
+        if (cited.length > 0) sources = cited
+      }
+
+      const cleanText = text.replace(/<anki-card>.*?<\/anki-card>/gs, '').replace(/<progress-update>[\s\S]*?<\/progress-update>/g, '').replace(/<sources>[\s\S]*?<\/sources>/g, '').trim()
+      const assistantMsg = { role: 'assistant', content: cleanText, cards: parsedCards.length > 0 ? parsedCards : undefined, sources: sources || undefined }
       const updatedMsgs = [...newMsgs, assistantMsg]
       setChatTabMsgs(updatedMsgs)
       setTimeout(() => chatTabScrollRef.current?.scrollTo({ top: chatTabScrollRef.current.scrollHeight, behavior: 'smooth' }), 50)
@@ -3486,6 +3500,20 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                       )}
                     </div>
                   ))}
+                  {/* Web search sources */}
+                  {m.sources?.length > 0 && (
+                    <div style={{ maxWidth: '80%', marginTop: 6, padding: '8px 12px', borderRadius: 6, background: 'rgba(88,166,255,.06)', border: '1px solid rgba(88,166,255,.12)' }}>
+                      <div style={{ fontSize: 9, color: '#58a6ff', fontWeight: 700, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Sources</div>
+                      {m.sources.map((src, si) => (
+                        <div key={si} style={{ fontSize: 10, marginBottom: 2 }}>
+                          <a href={src.url?.startsWith('http') ? src.url : `https://${src.url}`} target="_blank" rel="noopener noreferrer" style={{ color: '#58a6ff', textDecoration: 'none' }}>
+                            {src.title || src.url}
+                          </a>
+                          {src.url && <span style={{ color: '#484f58', marginLeft: 6, fontSize: 9 }}>{src.url.replace(/^https?:\/\//, '').split('/')[0]}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
               {chatTabLoading && (
