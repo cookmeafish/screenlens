@@ -223,6 +223,7 @@ export default function App() {
   const [chatTabSessionId, setChatTabSessionId] = useState(null)
   const [chatTabEditingTitle, setChatTabEditingTitle] = useState(null)
   const [chatTabWebSearch, setChatTabWebSearch] = useState(false)
+  const [chatTabStatus, setChatTabStatus] = useState(null) // null | 'searching' | 'thinking' | 'search-done' | 'search-empty' | 'search-failed'
   const chatTabScrollRef = useRef(null)
 
   // Load chat sessions from disk on mount
@@ -2256,21 +2257,26 @@ IMPORTANT BEHAVIOR RULES:
 
       // Web search if enabled
       if (chatTabWebSearch) {
+        setChatTabStatus('searching')
         systemPrompt += '\n\n5. You have WEB SEARCH capability. Search results from the internet are provided below. You MUST use them to answer the user\'s question. Do NOT say you cannot search the internet — the search has already been performed for you.'
         try {
           const searchRes = await fetch(`/api/web-search?q=${encodeURIComponent(q)}`)
           const searchData = await searchRes.json()
           if (searchData.results?.length > 0) {
+            setChatTabStatus('search-done')
             systemPrompt += `\n\nWEB SEARCH RESULTS for "${q}":\n` +
               searchData.results.map((r, i) => `${i + 1}. ${r.title}\n   URL: ${r.url}\n   ${r.snippet}`).join('\n\n') +
               '\n\nBase your answer on these search results. Cite the source URLs when referencing specific information.'
           } else {
+            setChatTabStatus('search-empty')
             systemPrompt += '\n\nWeb search returned no results. Answer from your own knowledge but mention the search found nothing.'
           }
         } catch {
+          setChatTabStatus('search-failed')
           systemPrompt += '\n\nWeb search failed. Answer from your own knowledge but mention the search encountered an error.'
         }
       }
+      setChatTabStatus('thinking')
 
       if (chatTabAttachedDeck) {
         const cardSummary = chatTabAttachedDeck.cards.map(c => `• ${c.front} → ${c.back}`).join('\n')
@@ -2315,6 +2321,7 @@ Focus on their weak areas. If you discover new struggles or notice improvement, 
       setChatTabMsgs(prev => [...prev, { role: 'assistant', content: 'Error: ' + err.message }])
     } finally {
       setChatTabLoading(false)
+      setChatTabStatus(null)
     }
   }
 
@@ -3482,9 +3489,16 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                 </div>
               ))}
               {chatTabLoading && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#7d8590', fontSize: 12, padding: '8px 0' }}>
-                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#58a6ff', animation: 'pulse 1.5s ease infinite' }} />
-                  Thinking...
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '8px 0' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: chatTabStatus === 'searching' ? '#58a6ff' : chatTabStatus === 'search-done' ? '#7ee787' : chatTabStatus === 'search-empty' || chatTabStatus === 'search-failed' ? '#f0883e' : '#7d8590', fontSize: 12 }}>
+                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: chatTabStatus === 'searching' ? '#58a6ff' : chatTabStatus === 'thinking' ? '#d2a8ff' : '#58a6ff', animation: 'pulse 1.5s ease infinite' }} />
+                    {chatTabStatus === 'searching' && 'Searching the web...'}
+                    {chatTabStatus === 'search-done' && 'Found results. Analyzing...'}
+                    {chatTabStatus === 'search-empty' && 'No results found. Answering from knowledge...'}
+                    {chatTabStatus === 'search-failed' && 'Search failed. Answering from knowledge...'}
+                    {chatTabStatus === 'thinking' && (chatTabWebSearch ? 'Generating response with search results...' : 'Thinking...')}
+                    {!chatTabStatus && 'Thinking...'}
+                  </div>
                 </div>
               )}
             </div>
@@ -4253,7 +4267,9 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                 ))}
               </div>
             ))}
-            {chatTabLoading && <div style={{ fontSize: 11, color: '#7d8590', padding: '4px 0' }}>Thinking...</div>}
+            {chatTabLoading && <div style={{ fontSize: 11, color: chatTabStatus === 'searching' ? '#58a6ff' : '#7d8590', padding: '4px 0' }}>
+              {chatTabStatus === 'searching' ? 'Searching the web...' : chatTabStatus === 'search-done' ? 'Analyzing results...' : 'Thinking...'}
+            </div>}
           </div>
           <div style={{ padding: '8px 12px', borderTop: '1px solid #2a3040' }}>
             {!chatTabAttachedDeck && ankiConnected && (
