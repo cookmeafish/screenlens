@@ -1723,6 +1723,22 @@ Output ONLY raw JSON. No markdown, no backticks.`
     tmp.innerHTML = html
     return (tmp.textContent || tmp.innerText || '').trim()
   }
+  const generateQuestionsForCard = async (card, rules, studyLang, knowledgeContext) => {
+    const front = getCardFront(card)
+    const back = getCardBack(card)
+    const questionsPerCard = rules.questionsPerCard || 3
+    const questionPrompt = rules.questionPrompt || defaultStudyRules.questionPrompt
+    try {
+      const prompt = `Card front: "${front}"\nCard back: "${back}"\n\nGenerate exactly ${questionsPerCard} quiz questions for this flashcard.\n\nRULES:\n- DO NOT include the answer or the card front word in the question\n- DO NOT ask "what is the translation of X" where X is the answer — that's too obvious\n- Questions should test UNDERSTANDING, not just translation. Use scenarios, fill-in-the-blank with context, definitions, usage examples\n- Each question should approach the concept from a DIFFERENT angle\n- For language cards: test usage in sentences, synonyms/antonyms, grammatical properties — not just "translate this word"\n\n${questionPrompt}\n\nPrefer text-based answers. Only use multiple choice if genuinely helpful. If using multiple choice, format as: "Question?\\nA) option\\nB) option\\nC) option\\nD) option"\n\nGenerate all questions in ${studyLang}. The student will answer in ${studyLang}.${knowledgeContext}\n\nReturn a JSON array of ${questionsPerCard} question strings. Output ONLY raw JSON. No markdown, no backticks.`
+      const text = await providerConfig.call(apiKey, 'You generate flashcard quiz questions. Always respond with a valid JSON array of strings.', prompt)
+      const parsed = JSON.parse(text.trim().replace(/^```json?\s*/i, '').replace(/```\s*$/, ''))
+      if (!Array.isArray(parsed)) return [`What concept is being tested here? Hint: ${back.slice(0, 20)}...`]
+      return parsed.slice(0, questionsPerCard)
+    } catch {
+      return [`What concept relates to: ${back.slice(0, 30)}...?`, `Explain this in your own words.`, `Why is this important?`]
+    }
+  }
+
   const getCardFront = (card) => {
     const fields = card.fields ? Object.values(card.fields) : []
     const firstField = [...fields].sort((a, b) => a.order - b.order)[0]
@@ -1763,42 +1779,49 @@ Output ONLY raw JSON. No markdown, no backticks.`
       const cards = await ankiCardsInfo(shuffled.slice(0, 100))
       console.log('[Study] loaded', cards.length, 'cards from deck:', deck)
       setStudyAllCards(cards)
-      setStudyBatchIdx(0)
       setStudyStats({ easy: 0, good: 0, hard: 0, again: 0 })
 
-      // Load initial batch of 10 cards
       const rules = activeMode.studyRules || (activeMode.type === 'language' ? defaultStudyRules : defaultGeneralStudyRules)
       const cardsAtOnce = 10
-      const questionsPerCard = rules.questionsPerCard || 3
-      const questionPrompt = rules.questionPrompt || defaultStudyRules.questionPrompt
       const studyLang = rules.studyLanguage || 'English'
       const knowledgeContext = knowledgeRes.content ? `\n\nReference material:\n${knowledgeRes.content.substring(0, 4000)}\n\nUse this context to create more specific, contextual questions.` : ''
 
-      const initialCards = cards.slice(0, cardsAtOnce)
-      const cardStates = []
-      for (const card of initialCards) {
-        const front = getCardFront(card)
-        const back = getCardBack(card)
-        let questions = []
-        try {
-          const prompt = `Card front: "${front}"\nCard back: "${back}"\n\nGenerate exactly ${questionsPerCard} quiz questions for this flashcard.\n\nRULES:\n- DO NOT include the answer or the card front word in the question\n- DO NOT ask "what is the translation of X" where X is the answer — that's too obvious\n- Questions should test UNDERSTANDING, not just translation. Use scenarios, fill-in-the-blank with context, definitions, usage examples\n- Each question should approach the concept from a DIFFERENT angle\n- For language cards: test usage in sentences, synonyms/antonyms, grammatical properties — not just "translate this word"\n\n${questionPrompt}\n\nPrefer text-based answers. Only use multiple choice if genuinely helpful (e.g. choosing between similar concepts). If using multiple choice, format as: "Question?\\nA) option\\nB) option\\nC) option\\nD) option"\n\nGenerate all questions in ${studyLang}. The student will answer in ${studyLang}.${knowledgeContext}\n\nReturn a JSON array of ${questionsPerCard} question strings. Output ONLY raw JSON. No markdown, no backticks.`
-          const text = await providerConfig.call(apiKey, 'You generate flashcard quiz questions. Always respond with a valid JSON array of strings.', prompt)
-          questions = JSON.parse(text.trim().replace(/^```json?\s*/i, '').replace(/```\s*$/, ''))
-          if (!Array.isArray(questions)) questions = [`What concept is being tested here? Hint: ${back.slice(0, 20)}...`]
-        } catch {
-          questions = [`What concept relates to: ${back.slice(0, 30)}...?`, `Explain this in your own words.`, `Why is this important?`]
-        }
-        cardStates.push({ cardId: card.cardId, front, back, questions: questions.slice(0, questionsPerCard), answers: [], results: [], done: false, questionIdx: 0 })
+      // Generate first card only, then start immediately
+      const firstCard = cards[0]
+      const firstQuestions = await generateQuestionsForCard(firstCard, rules, studyLang, knowledgeContext)
+      const firstCardState = {
+        cardId: firstCard.cardId, front: getCardFront(firstCard), back: getCardBack(firstCard),
+        questions: firstQuestions, answers: [], results: [], done: false, questionIdx: 0,
       }
 
-      console.log('[Study] started with', cardStates.length, 'active cards')
-      setStudyCardState(cardStates)
-      setStudyBatchIdx(cardsAtOnce) // next card to pull from pool
-      setStudyQueue([]) // not using pre-built queue anymore
+      console.log('[Study] started with first card, generating rest in background')
+      setStudyCardState([firstCardState])
+      setStudyBatchIdx(cardsAtOnce) // pullNewCard starts at index 10+
+      setStudyQueue([])
       setStudyQueueIdx(0)
       setStudyInput('')
       setStudyLoading(false)
       setStudyPhase('question')
+
+      // Background: generate cards 1..9 and append as ready
+      ;(async () => {
+        const backgroundCards = cards.slice(1, cardsAtOnce)
+        for (const card of backgroundCards) {
+          if (studyWrappingUpRef.current) {
+            setStudyCardState(prev => [...prev, {
+              cardId: card.cardId, front: getCardFront(card), back: getCardBack(card),
+              questions: [], answers: [], results: [], done: true, skipped: true, questionIdx: 0,
+            }])
+            continue
+          }
+          const questions = await generateQuestionsForCard(card, rules, studyLang, knowledgeContext)
+          if (studyWrappingUpRef.current) continue
+          setStudyCardState(prev => [...prev, {
+            cardId: card.cardId, front: getCardFront(card), back: getCardBack(card),
+            questions, answers: [], results: [], done: false, questionIdx: 0,
+          }])
+        }
+      })()
     } catch (err) {
       console.error('[Study] failed to start:', err.message)
       setAnkiError('Study failed: ' + err.message)
@@ -1807,6 +1830,7 @@ Output ONLY raw JSON. No markdown, no backticks.`
   }
 
   const lastAskedCardRef = useRef(null)
+  const studyWrappingUpRef = useRef(false)
 
   // Pick a random active (not done) card — avoid same card twice in a row
   const getNextStudyQuestion = () => {
@@ -1917,7 +1941,7 @@ Output ONLY raw JSON. No markdown, no backticks.`
       setStudyCardState(prev => {
         const allDone = prev.every(cs => cs.done)
         const allEvaluated = prev.every(cs => !cs.evaluating)
-        if (allDone && allEvaluated && !studyWrappingUp) {
+        if (allDone && allEvaluated && !studyWrappingUpRef.current) {
           // All cards done — if no more in pool, go to summary
           if (studyBatchIdx >= studyAllCards.length) {
             setTimeout(() => setStudyPhase('summary'), 100)
@@ -1939,31 +1963,23 @@ Output ONLY raw JSON. No markdown, no backticks.`
 
   // Pull a new card from the pool to replace a completed one
   const pullNewCard = async () => {
-    if (studyWrappingUp || studyBatchIdx >= studyAllCards.length) return
+    if (studyWrappingUpRef.current || studyBatchIdx >= studyAllCards.length) return
     const card = studyAllCards[studyBatchIdx]
     if (!card) return
     setStudyBatchIdx(prev => prev + 1)
 
     const rules = activeMode.studyRules || defaultStudyRules
-    const questionsPerCard = rules.questionsPerCard || 3
     const studyLang = rules.studyLanguage || 'English'
-    const questionPrompt = rules.questionPrompt || defaultStudyRules.questionPrompt
-    const front = getCardFront(card)
-    const back = getCardBack(card)
+    const knowledgeContext = studyKnowledge ? `\n\nReference material:\n${studyKnowledge.substring(0, 2000)}` : ''
 
-    let questions = []
-    try {
-      const prompt = `Card front: "${front}"\nCard back: "${back}"\n\nGenerate exactly ${questionsPerCard} quiz questions.\n\nRULES:\n- DO NOT include the answer or card front word in the question\n- DO NOT ask obvious translation questions like "what means X"\n- Test UNDERSTANDING: scenarios, fill-in-the-blank, definitions, usage\n- Each question from a DIFFERENT angle\n\n${questionPrompt}\n\nPrefer text-based answers. Multiple choice only if genuinely helpful.\n\nGenerate in ${studyLang}.${studyKnowledge ? `\n\nReference material:\n${studyKnowledge.substring(0, 2000)}` : ''}\n\nReturn a JSON array of ${questionsPerCard} strings. Output ONLY raw JSON.`
-      const text = await providerConfig.call(apiKey, 'You generate flashcard quiz questions. Always respond with a valid JSON array of strings.', prompt)
-      questions = JSON.parse(text.trim().replace(/^```json?\s*/i, '').replace(/```\s*$/, ''))
-      if (!Array.isArray(questions)) questions = [`What concept relates to: ${back.slice(0, 30)}...?`]
-    } catch {
-      questions = [`What concept relates to: ${back.slice(0, 30)}...?`, `Explain in your own words.`, `Why is this important?`]
-    }
+    const questions = await generateQuestionsForCard(card, rules, studyLang, knowledgeContext)
+    if (studyWrappingUpRef.current) return
 
-    const newCardState = { cardId: card.cardId, front, back, questions: questions.slice(0, questionsPerCard), answers: [], results: [], done: false, questionIdx: 0 }
-    setStudyCardState(prev => [...prev, newCardState])
-    console.log('[Study] pulled new card:', front)
+    setStudyCardState(prev => [...prev, {
+      cardId: card.cardId, front: getCardFront(card), back: getCardBack(card),
+      questions, answers: [], results: [], done: false, questionIdx: 0,
+    }])
+    console.log('[Study] pulled new card:', getCardFront(card))
   }
 
   // startBatch is no longer used in the new system but keep for compatibility
@@ -2004,6 +2020,7 @@ Output ONLY raw JSON. No markdown, no backticks.`
     setStudyInput('')
     setAnkiError(null)
     setStudyWrappingUp(false)
+    studyWrappingUpRef.current = false
     setStudyDeleteConfirm(null)
     setStudyFeedbackChat({})
     setStudyInsights(null)
@@ -2079,9 +2096,19 @@ Last updated: ${new Date().toISOString().split('T')[0]}
     }
   }
 
-  // Wrap Up — stop loading new cards, finish current batch
+  // Wrap Up — stop new cards, discard unstarted ones, finish in-progress only
   const studyWrapUp = () => {
+    studyWrappingUpRef.current = true
     setStudyWrappingUp(true)
+    setStudyCardState(prev => {
+      const currentCardIdx = currentQuestion?.cardIdx ?? -1
+      return prev.map((cs, idx) => {
+        if (!cs.done && cs.answers.length === 0 && idx !== currentCardIdx) {
+          return { ...cs, done: true, skipped: true }
+        }
+        return cs
+      })
+    })
   }
 
   // End Now — immediately go to summary with partial results
@@ -2098,6 +2125,7 @@ Last updated: ${new Date().toISOString().split('T')[0]}
     setStudyCardState(newStates)
     setStudyPhase('summary')
     setStudyWrappingUp(false)
+    studyWrappingUpRef.current = false
   }
 
   // "I know this" — delete card from Anki
