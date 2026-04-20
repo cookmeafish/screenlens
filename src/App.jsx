@@ -210,6 +210,9 @@ export default function App() {
   const [studyWrappingUp, setStudyWrappingUp] = useState(false)
   const [studyDeleteConfirm, setStudyDeleteConfirm] = useState(null) // cardIdx being confirmed for deletion
   const [studyFeedbackChat, setStudyFeedbackChat] = useState({}) // { [cardIdx]: { messages, input, loading } }
+  const [studyCurrentHint, setStudyCurrentHint] = useState(null) // hint text for current question
+  const [studyHintLevel, setStudyHintLevel] = useState(0) // 0=none, 1=hint1 shown, 2=hint2 shown
+  const [studyAnswerHistory, setStudyAnswerHistory] = useState([]) // [{cardIdx, questionIdx}] for undo
   const [studyInsights, setStudyInsights] = useState(null)
   const [studyInsightsLoading, setStudyInsightsLoading] = useState(false)
   const [studySyncNotification, setStudySyncNotification] = useState(false)
@@ -1726,18 +1729,43 @@ Output ONLY raw JSON. No markdown, no backticks.`
   const generateQuestionsForCard = async (card, rules, studyLang, knowledgeContext) => {
     const front = getCardFront(card)
     const back = getCardBack(card)
-    const questionsPerCard = rules.questionsPerCard || 3
+    const n = rules.questionsPerCard || 3
     const questionPrompt = rules.questionPrompt || defaultStudyRules.questionPrompt
+
+    const orderRules = n === 1
+      ? `Generate 1 question. It must be BLIND RECALL — never mention the target word/answer.`
+      : [
+          `Generate exactly ${n} questions in this STRICT ORDER:`,
+          `Q1 (BLIND RECALL): Never name or hint at the target word/answer. Present a scenario, definition, or usage context that forces the student to produce the exact word. Example: "You need to X in situation Y — what word/tool/concept applies?"`,
+          n >= 3 ? `Q2–Q${n - 1} (GUIDED RECALL): May reference related concepts, synonyms as contrast, or fill-in-the-blank. Must still require the EXACT target word. E.g. "Instead of [synonym], what [N]-letter word means...?" Each from a DIFFERENT angle.` : null,
+          `Q${n} (DEEP UNDERSTANDING): May freely name the subject. Test HOW, WHY, WHEN, or process. E.g. "Explain how X works" or "What distinguishes X from Y?" Open-ended — student demonstrates conceptual depth.`,
+        ].filter(Boolean).join('\n')
+
+    const prompt = `Card front: "${front}"\nCard back: "${back}"\n\n${orderRules}\n\nCRITICAL RULES:\n- Questions must require the SPECIFIC answer on this card — synonyms are NOT acceptable for recall/fill_blank questions\n- NEVER construct a question whose only purpose is to directly name the answer (e.g. "what noun corresponds to adjective X?" when that noun IS the answer)\n- Each question must test a DIFFERENT angle\n- For language cards: test usage in sentences, grammatical properties, contextual usage\n- For conceptual cards: test application, process, comparison\n\n${questionPrompt}\n\nGenerate all questions in ${studyLang}.${knowledgeContext}\n\nReturn a JSON array of exactly ${n} objects:\n[\n  {\n    "question": "the question text",\n    "type": "recall" | "fill_blank" | "explanation",\n    "hint1": "N letters" (letter count of primary answer, null for explanation),\n    "hint2": "starts with 'X'" (first letter of primary answer, null for explanation),\n    "acceptedAnswers": ["answer1", "answer2"] (lowercase; exact words that are correct; empty for explanation)\n  }\n]\nOutput ONLY raw JSON array. No markdown, no backticks.`
+
     try {
-      const prompt = `Card front: "${front}"\nCard back: "${back}"\n\nGenerate exactly ${questionsPerCard} quiz questions for this flashcard.\n\nRULES:\n- DO NOT include the answer or the card front word in the question\n- DO NOT ask "what is the translation of X" where X is the answer — that's too obvious\n- Questions should test UNDERSTANDING, not just translation. Use scenarios, fill-in-the-blank with context, definitions, usage examples\n- Each question should approach the concept from a DIFFERENT angle\n- For language cards: test usage in sentences, synonyms/antonyms, grammatical properties — not just "translate this word"\n\n${questionPrompt}\n\nPrefer text-based answers. Only use multiple choice if genuinely helpful. If using multiple choice, format as: "Question?\\nA) option\\nB) option\\nC) option\\nD) option"\n\nGenerate all questions in ${studyLang}. The student will answer in ${studyLang}.${knowledgeContext}\n\nReturn a JSON array of ${questionsPerCard} question strings. Output ONLY raw JSON. No markdown, no backticks.`
-      const text = await providerConfig.call(apiKey, 'You generate flashcard quiz questions. Always respond with a valid JSON array of strings.', prompt)
+      const text = await providerConfig.call(apiKey, 'You generate structured flashcard quiz questions. Always respond with a valid JSON array of objects.', prompt)
       const parsed = JSON.parse(text.trim().replace(/^```json?\s*/i, '').replace(/```\s*$/, ''))
-      if (!Array.isArray(parsed)) return [`What concept is being tested here? Hint: ${back.slice(0, 20)}...`]
-      return parsed.slice(0, questionsPerCard)
+      if (!Array.isArray(parsed)) throw new Error('not array')
+      return parsed.slice(0, n).map(q => ({
+        question: typeof q === 'string' ? q : (q.question || ''),
+        type: q.type || 'recall',
+        hint1: q.hint1 || null,
+        hint2: q.hint2 || null,
+        acceptedAnswers: Array.isArray(q.acceptedAnswers) ? q.acceptedAnswers.map(a => String(a).toLowerCase().trim()) : [],
+      }))
     } catch {
-      return [`What concept relates to: ${back.slice(0, 30)}...?`, `Explain this in your own words.`, `Why is this important?`]
+      const fallback = [
+        { question: `What concept relates to: ${back.slice(0, 30)}...?`, type: 'recall', hint1: `${back.split(/\s+/)[0].length} letters`, hint2: `starts with '${back[0]?.toUpperCase() || '?'}'`, acceptedAnswers: [back.toLowerCase().trim()] },
+        { question: `Explain this in your own words.`, type: 'explanation', hint1: null, hint2: null, acceptedAnswers: [] },
+        { question: `Why is this important?`, type: 'explanation', hint1: null, hint2: null, acceptedAnswers: [] },
+      ]
+      return fallback.slice(0, n)
     }
   }
+
+  // Extracts question text whether question is a string (legacy) or object {question, type, ...}
+  const getQuestionText = (q) => (typeof q === 'string' ? q : q?.question || '')
 
   const getCardFront = (card) => {
     const fields = card.fields ? Object.values(card.fields) : []
@@ -1791,7 +1819,7 @@ Output ONLY raw JSON. No markdown, no backticks.`
       const firstQuestions = await generateQuestionsForCard(firstCard, rules, studyLang, knowledgeContext)
       const firstCardState = {
         cardId: firstCard.cardId, front: getCardFront(firstCard), back: getCardBack(firstCard),
-        questions: firstQuestions, answers: [], results: [], done: false, questionIdx: 0,
+        questions: firstQuestions, answers: [], results: [], done: false, questionIdx: 0, questionAttempts: [],
       }
 
       console.log('[Study] started with first card, generating rest in background')
@@ -1818,7 +1846,7 @@ Output ONLY raw JSON. No markdown, no backticks.`
           if (studyWrappingUpRef.current) continue
           setStudyCardState(prev => [...prev, {
             cardId: card.cardId, front: getCardFront(card), back: getCardBack(card),
-            questions, answers: [], results: [], done: false, questionIdx: 0,
+            questions, answers: [], results: [], done: false, questionIdx: 0, questionAttempts: [],
           }])
         }
       })()
@@ -1856,27 +1884,57 @@ Output ONLY raw JSON. No markdown, no backticks.`
   const submitStudyAnswer = async () => {
     if (!studyInput.trim() || studyLoading || !currentQuestion) return
     const answer = studyInput.trim()
-    const { cardIdx } = currentQuestion
+    const { cardIdx, questionIdx } = currentQuestion
+    const cs = studyCardState[cardIdx]
+    const questionObj = cs.questions[questionIdx]
+    const qpc = (activeMode.studyRules || defaultStudyRules).questionsPerCard || 3
+    const isExplanation = questionObj?.type === 'explanation'
+    const acceptedAnswers = questionObj?.acceptedAnswers || []
 
-    // Record answer instantly — no AI call, no delay
+    // Track this attempt in questionAttempts
+    const prevAttempts = cs.questionAttempts?.[questionIdx] || []
+    const allAttempts = [...prevAttempts, answer]
+
+    // Check correctness for non-explanation questions with acceptedAnswers
+    const normalize = (s) => s.toLowerCase().trim().replace(/[.!?,;:]/g, '').replace(/\s+/g, ' ')
+    const isCorrect = !isExplanation && acceptedAnswers.length > 0 &&
+      acceptedAnswers.some(a => normalize(a) === normalize(answer))
+
     const newStates = [...studyCardState]
-    newStates[cardIdx] = {
-      ...newStates[cardIdx],
-      answers: [...newStates[cardIdx].answers, answer],
-      questionIdx: newStates[cardIdx].questionIdx + 1,
+    const newAttempts = [...(cs.questionAttempts || [])]
+    newAttempts[questionIdx] = allAttempts
+    newStates[cardIdx] = { ...cs, questionAttempts: newAttempts }
+
+    // If wrong on a hintable question and hints remain — show hint, stay on question
+    if (!isExplanation && acceptedAnswers.length > 0 && !isCorrect && studyHintLevel < 2) {
+      const newLevel = studyHintLevel + 1
+      setStudyHintLevel(newLevel)
+      setStudyCurrentHint(newLevel === 1 ? (questionObj.hint1 || null) : (questionObj.hint2 || null))
+      setStudyCardState(newStates)
+      setStudyInput('')
+      return
     }
 
-    const qpc = (activeMode.studyRules || defaultStudyRules).questionsPerCard || 3
+    // Advance — correct, explanation type, or max hints exhausted
+    setStudyHintLevel(0)
+    setStudyCurrentHint(null)
 
-    // Check if this card has all questions answered
+    newStates[cardIdx] = {
+      ...newStates[cardIdx],
+      answers: [...cs.answers, answer],
+      questionIdx: cs.questionIdx + 1,
+      questionAttempts: newAttempts,
+    }
+
+    // Push to undo history
+    setStudyAnswerHistory(prev => [...prev, { cardIdx, questionIdx }])
+
     if (newStates[cardIdx].questionIdx >= qpc) {
-      // All questions answered for this card — NOW evaluate with AI
       newStates[cardIdx].done = true
       newStates[cardIdx].evaluating = true
       setStudyCardState(newStates)
       setStudyInput('')
 
-      // Pick next question from remaining active cards immediately (no wait)
       const remaining = newStates.filter(cs => !cs.done && cs.questionIdx < cs.questions.length)
       if (remaining.length > 0) {
         const nextActive = remaining[Math.floor(Math.random() * remaining.length)]
@@ -1884,16 +1942,11 @@ Output ONLY raw JSON. No markdown, no backticks.`
       } else {
         setCurrentQuestion(null)
       }
-
-      // Evaluate all answers for this card in background
       evaluateCardAnswers(cardIdx, newStates[cardIdx])
-
-      // Pull a new card from pool to replace the completed one
       pullNewCard()
     } else {
       setStudyCardState(newStates)
       setStudyInput('')
-      // Pick next question (could be same card or different — random)
       const nextQ = (() => {
         const active = newStates.filter(cs => !cs.done && cs.questionIdx < cs.questions.length)
         if (active.length === 0) return null
@@ -1902,6 +1955,38 @@ Output ONLY raw JSON. No markdown, no backticks.`
       })()
       setCurrentQuestion(nextQ)
     }
+  }
+
+  const undoLastAnswer = () => {
+    if (studyAnswerHistory.length === 0) return
+    const last = studyAnswerHistory[studyAnswerHistory.length - 1]
+    const { cardIdx, questionIdx } = last
+    const cs = studyCardState[cardIdx]
+    if (!cs || cs.synced) return
+
+    const newAttempts = [...(cs.questionAttempts || [])]
+    newAttempts[questionIdx] = []
+    const wasDone = cs.done
+
+    setStudyCardState(prev => {
+      const updated = [...prev]
+      updated[cardIdx] = {
+        ...cs,
+        answers: cs.answers.slice(0, -1),
+        questionIdx,
+        questionAttempts: newAttempts,
+        done: false,
+        evaluating: false,
+        ...(wasDone ? { results: [], rating: null, ease: null } : {}),
+      }
+      return updated
+    })
+    if (wasDone && cs.rating) setStudyStats(prev => ({ ...prev, [cs.rating]: Math.max(0, prev[cs.rating] - 1) }))
+    setStudyAnswerHistory(prev => prev.slice(0, -1))
+    setCurrentQuestion({ cardIdx, questionIdx })
+    setStudyCurrentHint(null)
+    setStudyHintLevel(0)
+    setStudyInput('')
   }
 
   // Evaluate all answers for a completed card (runs in background, no blocking)
@@ -1913,7 +1998,7 @@ Output ONLY raw JSON. No markdown, no backticks.`
       const modeType = activeMode.type === 'language' ? `The student is learning a FOREIGN LANGUAGE (${activeMode.name}). Typos in ${studyLang} should be marked CORRECT if the concept is understood.` : `The student is studying ${activeMode.name}.`
       const grammarExtra = grammarOn ? ' For each answer also include "grammarNote" (correction or null) and "grammarRelevant" (true only if grammar error relates to what the card tests).' : ''
 
-      const questionsAndAnswers = cs.questions.map((q, i) => `Q${i+1}: ${q}\nAnswer: ${cs.answers[i] || '(no answer)'}`).join('\n\n')
+      const questionsAndAnswers = cs.questions.map((q, i) => `Q${i+1}: ${getQuestionText(q)}\nAnswer: ${cs.answers[i] || '(no answer)'}`).join('\n\n')
       const prompt = `Evaluate ALL answers for this flashcard at once.\n\nCard front: "${cs.front}"\nCard back: "${cs.back}"\n\n${modeType}\n\n${questionsAndAnswers}\n\nFor each answer, determine if it's correct based on the card content.\nALWAYS note any grammar, spelling, or accent issues in the feedback (e.g. missing accent mark on brújula). These notes are educational, not penalizing.${grammarExtra}\n\nReturn a JSON array of ${cs.questions.length} objects: [{"correct": true/false, "feedback": "brief explanation including any grammar/accent notes"${grammarOn ? ', "grammarNote": "...", "grammarRelevant": true/false' : ''}}]\n\nOutput ONLY raw JSON. No markdown, no backticks.`
 
       const text = await providerConfig.call(apiKey, 'You evaluate flashcard answers. Always respond with valid JSON only.', prompt)
@@ -2025,6 +2110,9 @@ Output ONLY raw JSON. No markdown, no backticks.`
     setStudyFeedbackChat({})
     setStudyInsights(null)
     setCurrentQuestion(null)
+    setStudyCurrentHint(null)
+    setStudyHintLevel(0)
+    setStudyAnswerHistory([])
   }
 
   // Generate spaced repetition insights + update progress observations
@@ -2166,7 +2254,7 @@ Last updated: ${new Date().toISOString().split('T')[0]}
     setStudyFeedbackChat(prev => ({ ...prev, [cardIdx]: { ...chat, messages: newMessages, input: '', loading: true } }))
     try {
       const resultsContext = cs.questions.map((question, qi) =>
-        `Q${qi+1}: ${question}\nAnswer: ${cs.answers[qi] || '(skipped)'}\nResult: ${cs.results[qi]?.correct ? 'Correct' : 'Incorrect'} — ${cs.results[qi]?.feedback}`
+        `Q${qi+1}: ${getQuestionText(question)}\nAnswer: ${cs.answers[qi] || '(skipped)'}\nResult: ${cs.results[qi]?.correct ? 'Correct' : 'Incorrect'} — ${cs.results[qi]?.feedback}`
       ).join('\n\n')
       const systemPrompt = `You are a study tutor. The student just studied this flashcard:
 Front: "${cs.front}"
@@ -3875,7 +3963,9 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
               const completedCount = studyCardState.filter(cs => cs.done).length
               const cq = currentQuestion
               const cs = cq ? studyCardState[cq.cardIdx] : null
-              const question = cs ? cs.questions[cq.questionIdx] : null
+              const questionObj = cs ? cs.questions[cq.questionIdx] : null
+              const question = getQuestionText(questionObj)
+              const canUndo = studyAnswerHistory.length > 0 && !studyCardState[studyAnswerHistory[studyAnswerHistory.length - 1]?.cardIdx]?.synced
 
               return (
                 <div>
@@ -3896,27 +3986,38 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                         {question}
                       </div>
 
+                      {studyCurrentHint && (
+                        <div style={{ fontSize: 11, color: '#ffa657', background: 'rgba(255,166,87,.08)', border: '1px solid rgba(255,166,87,.2)', borderRadius: 5, padding: '5px 10px', marginBottom: 8 }}>
+                          Hint: {studyCurrentHint}
+                        </div>
+                      )}
+
                       <div style={{ display: 'flex', gap: 8 }}>
                         <input
                           value={studyInput}
                           onChange={(e) => setStudyInput(e.target.value)}
                           onKeyDown={(e) => { if (e.key === 'Enter') submitStudyAnswer() }}
-                          placeholder="Type your answer..."
+                          placeholder={studyCurrentHint ? 'Try again...' : 'Type your answer...'}
                           style={{ ...S.keyInput, flex: 1, fontSize: 13, padding: '10px 14px' }}
                           autoFocus
                         />
                         <button onClick={submitStudyAnswer} disabled={!studyInput.trim()}
                           style={{ ...S.captureBtn, borderRadius: 6, opacity: !studyInput.trim() ? 0.5 : 1 }}>
-                          Submit
+                          {studyCurrentHint ? 'Try Again' : 'Submit'}
                         </button>
                       </div>
 
                       {/* Action buttons */}
                       <div style={{ display: 'flex', gap: 8, marginTop: 8, justifyContent: 'space-between' }}>
-                        <button onClick={() => setStudyDeleteConfirm(cq.cardIdx)}
-                          style={{ ...S.ghostBtn, fontSize: 10, color: '#7d8590', borderColor: '#2a3040' }}>
-                          I know this already
-                        </button>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <button onClick={() => setStudyDeleteConfirm(cq.cardIdx)}
+                            style={{ ...S.ghostBtn, fontSize: 10, color: '#7d8590', borderColor: '#2a3040' }}>
+                            I know this already
+                          </button>
+                          {canUndo && (
+                            <button onClick={undoLastAnswer} style={{ ...S.ghostBtn, fontSize: 10, color: '#7d8590', borderColor: '#2a3040' }}>← Back</button>
+                          )}
+                        </div>
                         <div style={{ display: 'flex', gap: 6 }}>
                           {!studyWrappingUp && (
                             <button onClick={studyWrapUp} style={{ ...S.ghostBtn, fontSize: 10, color: '#d29922', borderColor: 'rgba(210,153,34,.25)' }}>Wrap Up</button>
@@ -4001,7 +4102,7 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                             <div style={{ color: r.correct ? '#7ee787' : '#f85149', fontSize: 10, fontWeight: 700, marginBottom: 4 }}>
                               {r.correct ? '\u2713 CORRECT' : '\u2717 INCORRECT'}
                             </div>
-                            <div style={{ color: '#7d8590', marginBottom: 3 }}><span style={{ fontWeight: 600 }}>Q:</span> {cs.questions[qi]}</div>
+                            <div style={{ color: '#7d8590', marginBottom: 3 }}><span style={{ fontWeight: 600 }}>Q:</span> {getQuestionText(cs.questions[qi])}</div>
                             <div style={{ color: '#c9d1d9', marginBottom: 4 }}><span style={{ fontWeight: 600 }}>Your answer:</span> {cs.answers[qi]}</div>
                             <div style={{ color: r.correct ? '#7ee787' : '#ffa657', lineHeight: 1.5, fontSize: 11 }}>{r.feedback}</div>
                           </div>
@@ -4053,8 +4154,13 @@ Rules: Answer in 1-2 short sentences. Be direct. No filler, no repetition, no ov
                             {cs.results[qi]?.correct ? '\u2713 CORRECT' : '\u2717 INCORRECT'}
                           </div>
                           <div style={{ color: '#7d8590', marginBottom: 3 }}>
-                            <span style={{ fontWeight: 600 }}>Q:</span> {q}
+                            <span style={{ fontWeight: 600 }}>Q:</span> {getQuestionText(q)}
                           </div>
+                          {cs.questionAttempts?.[qi]?.length > 1 && (
+                            <div style={{ color: '#484f58', fontSize: 10, marginBottom: 3 }}>
+                              Previous attempts: {cs.questionAttempts[qi].slice(0, -1).join(', ')}
+                            </div>
+                          )}
                           <div style={{ color: '#c9d1d9', marginBottom: 4 }}>
                             <span style={{ fontWeight: 600 }}>Your answer:</span> {cs.answers[qi]}
                           </div>
