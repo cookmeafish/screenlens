@@ -1998,8 +1998,16 @@ Output ONLY raw JSON. No markdown, no backticks.`
       const modeType = activeMode.type === 'language' ? `The student is learning a FOREIGN LANGUAGE (${activeMode.name}). Typos in ${studyLang} should be marked CORRECT if the concept is understood.` : `The student is studying ${activeMode.name}.`
       const grammarExtra = grammarOn ? ' For each answer also include "grammarNote" (correction or null) and "grammarRelevant" (true only if grammar error relates to what the card tests).' : ''
 
-      const questionsAndAnswers = cs.questions.map((q, i) => `Q${i+1}: ${getQuestionText(q)}\nAnswer: ${cs.answers[i] || '(no answer)'}`).join('\n\n')
-      const prompt = `Evaluate ALL answers for this flashcard at once.\n\nCard front: "${cs.front}"\nCard back: "${cs.back}"\n\n${modeType}\n\n${questionsAndAnswers}\n\nFor each answer, determine if it's correct based on the card content.\nALWAYS note any grammar, spelling, or accent issues in the feedback (e.g. missing accent mark on brújula). These notes are educational, not penalizing.${grammarExtra}\n\nReturn a JSON array of ${cs.questions.length} objects: [{"correct": true/false, "feedback": "brief explanation including any grammar/accent notes"${grammarOn ? ', "grammarNote": "...", "grammarRelevant": true/false' : ''}}]\n\nOutput ONLY raw JSON. No markdown, no backticks.`
+      const questionsAndAnswers = cs.questions.map((q, i) => {
+        const isObj = typeof q === 'object' && q !== null
+        const type = isObj ? (q.type || 'recall') : 'recall'
+        const accepted = isObj && Array.isArray(q.acceptedAnswers) ? q.acceptedAnswers : []
+        const acceptedLine = (type !== 'explanation' && accepted.length > 0)
+          ? `\nAccepted answers (only these exact words count — synonyms are WRONG): ${accepted.join(', ')}`
+          : ''
+        return `Q${i+1} [${type}]: ${getQuestionText(q)}${acceptedLine}\nAnswer: ${cs.answers[i] || '(no answer)'}`
+      }).join('\n\n')
+      const prompt = `Evaluate ALL answers for this flashcard at once.\n\nCard front: "${cs.front}"\nCard back: "${cs.back}"\n\n${modeType}\n\n${questionsAndAnswers}\n\nGrading rules by question type:\n- recall / fill_blank: the answer MUST match one of the "Accepted answers" for that question. Normalize for case, accents, and minor typos. Synonyms, related words, or different words with the same meaning are INCORRECT — mark them wrong, and in the feedback acknowledge the synonym is related but note the specific word this card tests. If no "Accepted answers" line is given, fall back to the card back.\n- explanation: grade on conceptual understanding — accept any answer that correctly addresses the question.\nALWAYS note any grammar, spelling, or accent issues in the feedback (e.g. missing accent mark on brújula). These notes are educational, not penalizing.${grammarExtra}\n\nReturn a JSON array of ${cs.questions.length} objects: [{"correct": true/false, "feedback": "brief explanation including any grammar/accent notes"${grammarOn ? ', "grammarNote": "...", "grammarRelevant": true/false' : ''}}]\n\nOutput ONLY raw JSON. No markdown, no backticks.`
 
       const text = await providerConfig.call(apiKey, 'You evaluate flashcard answers. Always respond with valid JSON only.', prompt)
       const results = JSON.parse(text.trim().replace(/^```json?\s*/i, '').replace(/```\s*$/, ''))
